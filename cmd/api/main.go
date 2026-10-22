@@ -394,6 +394,12 @@ func main() {
 	}
 	auditRepo := postgres.NewAuditRepo(repoDB)
 	auditSvc := audit.NewService(auditRepo, txRepo)
+	// Destructive custodial account closure (#96). Every closure route is
+	// Owner/Admin only and writes a permanent compliance audit trail.
+	accountCloser := wallet.NewCloser(walletRepo, wallet.NewClosureRepository(repoDB), stellarClient, signer, auditSvc).
+		WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver)
+	walletHandler = walletHandler.WithCloser(accountCloser, server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	reconcileHandler = reconcileHandler.WithAuditLogger(auditSvc)
 	auditHandler := audit.NewHandler(auditSvc)
 	usageHandler := server.NewUsageHandler(repoDB)

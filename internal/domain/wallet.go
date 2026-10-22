@@ -70,17 +70,52 @@ type ConsolidationOperation struct {
 	CompletedAt       *time.Time      `json:"completed_at,omitempty"`
 }
 
-// AccountClosure represents a request to close a custodial account.
+// Account closure lifecycle states.
+const (
+	ClosureStatusPending   = "pending"
+	ClosureStatusCompleted = "completed"
+	ClosureStatusFailed    = "failed"
+)
+
+// AccountClosure is the permanent record of a destructive custodial account
+// closure: the trustlines removed, the AccountMerge that swept the remaining
+// native XLM to the tenant master address, and who authorised it and why.
 type AccountClosure struct {
-	ID                string     `json:"id"`
-	TenantID          string     `json:"tenant_id"`
-	WalletID          string     `json:"wallet_id"`
-	DestinationWallet string     `json:"destination_wallet"`
-	ActorType         string     `json:"actor_type"`
-	ActorID           string     `json:"actor_id"`
-	TransactionHash   *string    `json:"transaction_hash,omitempty"`
-	Status            string     `json:"status"` // pending, completed, failed
-	ErrorMessage      *string    `json:"error_message,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	ID                 string            `json:"id"`
+	TenantID           string            `json:"tenant_id"`
+	Mode               Mode              `json:"mode"`
+	WalletID           string            `json:"wallet_id"`
+	DestinationWallet  *string           `json:"destination_wallet,omitempty"`
+	DestinationAddress string            `json:"destination_address"`
+	ActorType          string            `json:"actor_type"`
+	ActorID            string            `json:"actor_id"`
+	Justification      string            `json:"justification"`
+	RemovedTrustlines  []ClosedTrustline `json:"removed_trustlines"`
+	NativeBalance      *decimal.Decimal  `json:"native_balance,omitempty"`
+	TransactionHash    *string           `json:"transaction_hash,omitempty"`
+	Status             string            `json:"status"` // pending, completed, failed
+	ErrorMessage       *string           `json:"error_message,omitempty"`
+	CreatedAt          time.Time         `json:"created_at"`
+	CompletedAt        *time.Time        `json:"completed_at,omitempty"`
+}
+
+// ClosedTrustline identifies one asset trustline removed during a closure.
+type ClosedTrustline struct {
+	AssetCode string `json:"asset_code"`
+	Issuer    string `json:"issuer"`
+}
+
+// TenantCustodySettings holds the per-tenant, per-mode accounts that the
+// closure protocol depends on.
+type TenantCustodySettings struct {
+	TenantID string `json:"tenant_id"`
+	Mode     Mode   `json:"mode"`
+	// MasterAddress receives the native XLM reserves of every closed wallet.
+	MasterAddress string `json:"master_address"`
+	// PrimarySettlementWalletID is the wallet the tenant settles through; it
+	// can never be closed.
+	PrimarySettlementWalletID *string   `json:"primary_settlement_wallet_id,omitempty"`
+	UpdatedBy                 string    `json:"updated_by"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
 }

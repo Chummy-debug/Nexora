@@ -28,18 +28,6 @@ func TestConsolidationCrossTenantRefusal(t *testing.T) {
 	// Acceptance criteria: Wallet can never be consolidated outside calling tenant
 }
 
-// TestAccountClosureRefusal verifies closure refuses last account or accounts with obligations.
-func TestAccountClosureRefusal(t *testing.T) {
-	t.Skip("Implementation: check wallet count and balances/trustlines before allowing closure")
-	// Acceptance criteria: Refuses to close last account or one with live obligations
-}
-
-// TestAccountClosureSequence verifies closure sets account sequence correctly.
-func TestAccountClosureSequence(t *testing.T) {
-	t.Skip("Implementation: AccountMerge operation sets sequence, endpoint handles it")
-	// Acceptance criteria: Closure requires sequence set, endpoint handles rather than caller
-}
-
 // TestConsolidationAuditLog verifies all operations written to tenant audit log.
 func TestConsolidationAuditLog(t *testing.T) {
 	t.Skip("Implementation: write audit event with actor_type, actor_id, operation details")

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/Lumen-Nexora/Nexora/internal/api"
+	"github.com/Lumen-Nexora/Nexora/internal/domain"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -17,6 +18,8 @@ type Handler struct {
 	contractSvc  ContractService
 	idem         func(http.Handler) http.Handler
 	guardianGate func(http.Handler) http.Handler
+	closer       *Closer
+	closureGate  func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
@@ -73,6 +76,16 @@ func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, result)
 }
 
+// WithCloser enables the destructive account closure and custody settings
+// endpoints. gate (e.g. an Owner/Admin role check) wraps every one of them,
+// including the reads, because the settings name the tenant's treasury
+// accounts.
+func (h *Handler) WithCloser(closer *Closer, gate func(http.Handler) http.Handler) *Handler {
+	h.closer = closer
+	h.closureGate = gate
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
@@ -86,6 +99,22 @@ func (h *Handler) Routes() func(r chi.Router) {
 		post("/{id}/trustlines", h.addTrustline)
 		if h.simulation != nil {
 			r.Post("/{id}/simulate", h.simulate)
+		}
+
+		if h.closer != nil {
+			gated := r.With()
+			if h.closureGate != nil {
+				gated = r.With(h.closureGate)
+			}
+			closePost := gated.Post
+			if h.idem != nil {
+				closePost = gated.With(h.idem).Post
+			}
+			closePost("/{id}/close", h.closeWallet)
+			gated.Get("/closures", h.listClosures)
+			gated.Get("/closures/{closureId}", h.getClosure)
+			gated.Get("/custody-settings", h.getCustodySettings)
+			gated.Put("/custody-settings", h.putCustodySettings)
 		}
 
 		if h.contractSvc != nil {
@@ -125,18 +154,7 @@ type setTimeLockRequest struct {
 }
 
 func (h *Handler) listWallets(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if value := r.URL.Query().Get("limit"); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 && parsed <= 100 {
-			limit = parsed
-		}
-	}
-	offset := 0
-	if value := r.URL.Query().Get("offset"); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 {
-			offset = parsed
-		}
-	}
+	limit, offset := pageParams(r)
 	wallets, err := h.svc.ListWallets(r.Context(), limit, offset)
 	if err != nil {
 		api.InternalError(w, err)
@@ -331,4 +349,105 @@ func (h *Handler) addTrustline(w http.ResponseWriter, r *http.Request) {
 		"asset":     req.Asset,
 		"tx_hash":   txHash,
 	})
+}
+
+type closeWalletRequest struct {
+	Justification string `json:"justification" validate:"required"`
+	// Confirm must repeat the wallet's public key.
+	Confirm string `json:"confirm" validate:"required"`
+}
+
+type custodySettingsRequest struct {
+	MasterAddress             string  `json:"master_address" validate:"required"`
+	PrimarySettlementWalletID *string `json:"primary_settlement_wallet_id,omitempty"`
+}
+
+func (h *Handler) closeWallet(w http.ResponseWriter, r *http.Request) {
+	var req closeWalletRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if err := api.Validate(req); err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+
+	closure, err := h.closer.Close(r.Context(), CloseRequest{
+		WalletID:      chi.URLParam(r, "id"),
+		Justification: req.Justification,
+		Confirm:       req.Confirm,
+	})
+	if err != nil {
+		// A closure that reached the ledger step and failed there is
+		// returned with its record so the operator sees the reason.
+		if closure != nil && closure.Status == domain.ClosureStatusFailed {
+			api.JSON(w, http.StatusBadGateway, closure)
+			return
+		}
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, closure)
+}
+
+func (h *Handler) listClosures(w http.ResponseWriter, r *http.Request) {
+	limit, offset := pageParams(r)
+	closures, err := h.closer.List(r.Context(), limit, offset)
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{"closures": closures})
+}
+
+func (h *Handler) getClosure(w http.ResponseWriter, r *http.Request) {
+	closure, err := h.closer.Get(r.Context(), chi.URLParam(r, "closureId"))
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, closure)
+}
+
+func (h *Handler) getCustodySettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.closer.GetCustodySettings(r.Context())
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, settings)
+}
+
+func (h *Handler) putCustodySettings(w http.ResponseWriter, r *http.Request) {
+	var req custodySettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if err := api.Validate(req); err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+	settings, err := h.closer.SetCustodySettings(r.Context(), req.MasterAddress, req.PrimarySettlementWalletID)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, settings)
+}
+
+func pageParams(r *http.Request) (limit, offset int) {
+	limit = 50
+	if value := r.URL.Query().Get("limit"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+	if value := r.URL.Query().Get("offset"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	return limit, offset
 }
