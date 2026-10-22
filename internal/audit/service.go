@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Lumen-Nexora/Nexora/internal/domain"
-	"github.com/Lumen-Nexora/Nexora/internal/postgres"
 	"github.com/Lumen-Nexora/Nexora/internal/tenant"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -67,6 +67,18 @@ func (s *service) Record(ctx context.Context, event *domain.AuditEvent) error {
 			event.ActorID = "system"
 		}
 	}
+	if err := s.append(ctx, event); err != nil {
+		return err
+	}
+	return nil
+}
+
+// append routes the write through the tamper-proof hash chain when one is
+// wired, and falls back to the plain append-only insert otherwise.
+func (s *service) append(ctx context.Context, event *domain.AuditEvent) error {
+	if s.tamper != nil {
+		return s.tamper.Append(ctx, event)
+	}
 	return s.repo.Create(ctx, event)
 }
 
@@ -109,7 +121,7 @@ func (s *service) Log(r *http.Request, action, resourceType, resourceID string, 
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if err := s.repo.Create(ctx, event); err != nil {
+	if err := s.append(ctx, event); err != nil {
 		log.Error().Err(err).Str("tenant_id", tenantID).Str("action", action).Msg("failed to persist audit log")
 	}
 }
