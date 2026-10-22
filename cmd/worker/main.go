@@ -115,13 +115,17 @@ func main() {
 	signerResolver := stellar.NewModeAwareSigners(signer, testSigner)
 
 	feeSvc := fees.NewService(feeRepo)
+	networkFeeAccounting := fees.NewNetworkFeeAccounting(feeRepo, fees.NewCoinGeckoHistoricalRateSource())
+	networkFeeRecorder := fees.NewNetworkFeeSettlementRecorder(networkFeeAccounting)
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
 		cfg.StellarLiveNetwork, map[string]string{
 			"USDC": cfg.StellarUSDCIssuer,
 			"EURC": cfg.StellarEURCIssuer,
 		}, cfg.PlatformFeeWalletPublicKey,
-	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+	).WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver).
+		WithSettlementDetailsRecorder(networkFeeRecorder)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.NewWithConfig(walletRepo, txRepo, stellarClient, indexer.Config{
@@ -354,6 +358,16 @@ func main() {
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
 	).WithDriftThreshold(driftThreshold)
+	if cfg.FraudDetectionEnabled {
+		pagerDuty := alerting.NewPagerDutyClient(alerting.PagerDutyConfig{
+			SecurityRoutingKey:   cfg.PagerDutySecurityRoutingKey,
+			ComplianceRoutingKey: cfg.PagerDutyComplianceRoutingKey,
+			Service:              "nexora-worker",
+		})
+		reconcileSvc = reconcileSvc.WithFraudDetector(
+			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
+		)
+	}
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	srv := asynq.NewServer(asynqOpt, asynq.Config{

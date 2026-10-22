@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -181,6 +182,8 @@ func main() {
 	orgSvc := org.NewService(repoDB, orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
 	feeSvc := fees.NewService(feeRepo)
+	networkFeeAccounting := fees.NewNetworkFeeAccounting(feeRepo, fees.NewCoinGeckoHistoricalRateSource())
+	networkFeeRecorder := fees.NewNetworkFeeSettlementRecorder(networkFeeAccounting)
 	walletSvc := wallet.NewServiceWithNetwork(walletRepo, stellarClient, cfg.MasterEncryptionKey, cfg.StellarLiveNetwork, tenantRepo).
 		WithSigner(signer).
 		WithClientResolver(clientResolver).
@@ -291,7 +294,9 @@ func main() {
 			"USDC": cfg.StellarUSDCIssuer,
 			"EURC": cfg.StellarEURCIssuer,
 		}, cfg.PlatformFeeWalletPublicKey,
-	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+	).WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver).
+		WithSettlementDetailsRecorder(networkFeeRecorder)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
@@ -333,6 +338,16 @@ func main() {
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
 	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD))
+	if cfg.FraudDetectionEnabled {
+		pagerDuty := alerting.NewPagerDutyClient(alerting.PagerDutyConfig{
+			SecurityRoutingKey:   cfg.PagerDutySecurityRoutingKey,
+			ComplianceRoutingKey: cfg.PagerDutyComplianceRoutingKey,
+			Service:              "nexora-api",
+		})
+		reconcileSvc = reconcileSvc.WithFraudDetector(
+			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
+		)
+	}
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 
 	authHandler := auth.NewHandler(authSvc)
@@ -385,7 +400,7 @@ func main() {
 	refundHandler := refund.NewHandler(refundSvc).WithIdempotency(idemMW).WithAuditLogger(auditSvc)
 	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
 	anchorHandler := anchor.NewHandler(anchorRegistry)
-	feeHandler := fees.NewHandler(feeSvc)
+	feeHandler := fees.NewHandler(feeSvc).WithAccounting(networkFeeAccounting)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo).WithAuditLogger(auditSvc)
 	webhookHandler := webhook.NewHandler(webhookSvc).
 		WithIdempotency(idempotency.MiddlewareWithOptions(idempotencyRepo, idempotency.Options{
@@ -442,6 +457,37 @@ func main() {
 		WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	idempotencyHandler := idempotency.NewHandler(idempotencyRepo)
 
+	var geoOptions server.GeoScreenOptions
+	if cfg.GeoScreenEnabled {
+		resolver, err := compliance.OpenMaxMindResolver(cfg.GeoIPDatabasePath)
+		if err != nil {
+			log.Fatal().Err(err).Msg("open MaxMind GeoIP database")
+		}
+		defer resolver.Close()
+
+		blockedCountries := compliance.DefaultBlockedCountries()
+		if raw := strings.TrimSpace(cfg.GeoBlockedCountries); raw != "" {
+			blockedCountries = nil
+			for _, code := range strings.Split(raw, ",") {
+				if code = strings.TrimSpace(code); code != "" {
+					blockedCountries = append(blockedCountries, code)
+				}
+			}
+		}
+		geoOptions = server.GeoScreenOptions{
+			Screener: compliance.NewGeoScreener(resolver, compliance.GeoScreenConfig{
+				BlockedCountries: blockedCountries,
+				BlockVPN:         cfg.GeoBlockVPN,
+				BlockTor:         cfg.GeoBlockTor,
+				BlockHosting:     cfg.GeoBlockHosting,
+				BlockProxy:       cfg.GeoBlockProxy,
+				AllowPrivateIPs:  true,
+				FailClosed:       cfg.GeoFailClosed,
+			}),
+			Audit: auditSvc,
+		}
+	}
+
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
@@ -466,6 +512,7 @@ func main() {
 		transferApprovalHandler,
 		tenantDataHandler,
 		server.AuditScopeDenials(auditSvc),
+		geoOptions,
 	)
 	server.RegisterDocsRoutes(srv.Router())
 
