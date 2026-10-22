@@ -31,6 +31,11 @@ type Screener interface {
 	RecordHold(ctx context.Context, tx *domain.Transaction, decision *domain.ScreeningDecision) error
 }
 
+type TravelRuleGate interface {
+	Requires(context.Context, string, decimal.Decimal, *domain.TravelRuleRequest) (bool, error)
+	Begin(context.Context, *domain.Transaction, *domain.TravelRuleRequest, domain.TransactionStatus) (domain.TravelRuleExchangeStatus, error)
+}
+
 type VelocityLimiter interface {
 	Reserve(context.Context, domain.ScreeningRequest) error
 	Finalize(context.Context, string, string, string) error
@@ -76,6 +81,7 @@ type TransferParams struct {
 	ExternalReference *string
 	Tags              []string
 	IdempotencyKey    string
+	TravelRule        *domain.TravelRuleRequest
 }
 
 type Service interface {
@@ -109,6 +115,13 @@ func ConfigureScreener(svc Service, screener Screener) Service {
 	return svc
 }
 
+func ConfigureTravelRuleGate(svc Service, gate TravelRuleGate) Service {
+	if configurable, ok := svc.(interface{ WithTravelRuleGate(TravelRuleGate) Service }); ok {
+		return configurable.WithTravelRuleGate(gate)
+	}
+	return svc
+}
+
 func ConfigureVelocityLimiter(svc Service, limiter VelocityLimiter) Service {
 	if configurable, ok := svc.(interface{ WithVelocityLimiter(VelocityLimiter) Service }); ok {
 		return configurable.WithVelocityLimiter(limiter)
@@ -132,6 +145,7 @@ type service struct {
 	stellar        stellar.Client
 	clientResolver stellar.ClientResolver
 	screener       Screener
+	travelRule     TravelRuleGate
 	velocity       VelocityLimiter
 	audit          AuditLogger
 	beneficiaries  BeneficiaryChecker
@@ -204,6 +218,11 @@ func (s *service) WithBeneficiaryChecker(checker BeneficiaryChecker) Service {
 
 func (s *service) WithScreener(screener Screener) Service {
 	s.screener = screener
+	return s
+}
+
+func (s *service) WithTravelRuleGate(gate TravelRuleGate) Service {
+	s.travelRule = gate
 	return s
 }
 
@@ -371,6 +390,15 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 		}
 	}
 
+	screeningHold := status == domain.StatusComplianceHold
+	travelRuleRequired := false
+	if s.travelRule != nil {
+		travelRuleRequired, err = s.travelRule.Requires(ctx, asset, amount, params.TravelRule)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var tenantPtr *string
 	if tenantID != "" {
 		tenantPtr = &tenantID
@@ -419,6 +447,10 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 		if approvalPolicy != nil {
 			tx.Status = domain.StatusApprovalPending
 		}
+	}
+	releaseStatus := tx.Status
+	if travelRuleRequired {
+		tx.Status = domain.StatusComplianceHold
 	}
 	if recordID := idempotency.RecordIDFromContext(ctx); recordID != "" && idempotencyKey != "" {
 		tx.IdempotencyRecordID = &recordID
@@ -497,10 +529,41 @@ func (s *service) initiate(ctx context.Context, params TransferParams) (*domain.
 	}
 	s.recordAudit(ctx, actor, "transfer.created", tx.ID)
 
-	if tx.Status == domain.StatusComplianceHold {
+	if screeningHold && s.screener != nil {
 		if err := s.screener.RecordHold(ctx, tx, decision); err != nil {
 			return nil, fmt.Errorf("record compliance hold: %w", err)
 		}
+	}
+	if travelRuleRequired {
+		exchangeStatus, beginErr := s.travelRule.Begin(ctx, tx, params.TravelRule, releaseStatus)
+		if beginErr != nil {
+			zerolog.Ctx(ctx).Error().Err(beginErr).Str("transaction_id", tx.ID).
+				Msg("transfer: Travel Rule exchange failed; transfer remains held")
+			return tx, nil
+		}
+		switch exchangeStatus {
+		case domain.TravelRuleExchangePending:
+			return tx, nil
+		case domain.TravelRuleExchangeRejected:
+			if err := s.repo.UpdateStatus(ctx, tx.ID, domain.StatusFailed, ""); err != nil {
+				return nil, fmt.Errorf("fail Travel Rule-rejected transfer: %w", err)
+			}
+			tx.Status = domain.StatusFailed
+			return tx, nil
+		case domain.TravelRuleExchangeConfirmed:
+			if releaseStatus == domain.StatusComplianceHold {
+				return tx, nil
+			}
+			if err := s.repo.UpdateStatus(ctx, tx.ID, releaseStatus, ""); err != nil {
+				return nil, fmt.Errorf("release Travel Rule hold: %w", err)
+			}
+			tx.Status = releaseStatus
+		default:
+			// Unknown exchange state is not an approval.
+			return tx, nil
+		}
+	}
+	if tx.Status == domain.StatusComplianceHold {
 		return tx, nil
 	}
 	if tx.Status == domain.StatusApprovalPending {

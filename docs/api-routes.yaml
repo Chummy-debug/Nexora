@@ -85,6 +85,7 @@ routes:
   - POST /v1/keys
   - "POST /v1/keys/{id}/rotate"
   - POST /v1/schedules
+  - POST /v1/travel-rule/confirmations
   - POST /v1/transfers
   - "POST /v1/transfer-approvals/{id}/approve"
   - "POST /v1/transfer-approvals/{id}/reject"

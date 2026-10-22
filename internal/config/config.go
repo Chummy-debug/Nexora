@@ -100,6 +100,10 @@ type Config struct {
 	ComplianceRoundTripMin          int
 	ComplianceFuzzyThreshold        int
 	ComplianceReloadMinutes         int
+	TravelRuleEnabled               bool
+	TravelRuleThresholdUSD          string
+	TravelRuleOriginatingVASPID     string
+	TravelRuleVASPDirectoryJSON     string
 	// Fraud detection observes reconciliation discrepancies for statistical
 	// frequency anomalies and micro-variance skimming.
 	FraudDetectionEnabled         bool
@@ -245,6 +249,18 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.TravelRuleEnabled {
+		if strings.TrimSpace(c.TravelRuleOriginatingVASPID) == "" {
+			return fmt.Errorf("TRAVEL_RULE_ORIGINATING_VASP_ID is required when TRAVEL_RULE_ENABLED=true")
+		}
+		if strings.TrimSpace(c.TravelRuleVASPDirectoryJSON) == "" {
+			return fmt.Errorf("TRAVEL_RULE_VASP_DIRECTORY_JSON is required when TRAVEL_RULE_ENABLED=true")
+		}
+		if strings.TrimSpace(c.TravelRuleThresholdUSD) == "" {
+			return fmt.Errorf("TRAVEL_RULE_THRESHOLD_USD is required when TRAVEL_RULE_ENABLED=true")
+		}
+	}
+
 	// Treasury operations build on-chain assets, so a treasury key implies the
 	// issuers that identify those assets must be present and well-formed.
 	treasuryConfigured := c.TreasurySecretKey != ""
@@ -352,6 +368,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES", "60")
 	viper.SetDefault("COMPLIANCE_FUZZY_THRESHOLD", "2")
 	viper.SetDefault("COMPLIANCE_RELOAD_MINUTES", "15")
+	viper.SetDefault("TRAVEL_RULE_ENABLED", "false")
+	viper.SetDefault("TRAVEL_RULE_THRESHOLD_USD", "1000")
 	viper.SetDefault("FRAUD_DETECTION_ENABLED", "true")
 	viper.SetDefault("GEO_SCREEN_ENABLED", "false")
 	viper.SetDefault("GEO_BLOCK_VPN", "true")
@@ -531,6 +549,10 @@ func Load() (*Config, error) {
 		ComplianceRoundTripMin:          viper.GetInt("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES"),
 		ComplianceFuzzyThreshold:        viper.GetInt("COMPLIANCE_FUZZY_THRESHOLD"),
 		ComplianceReloadMinutes:         viper.GetInt("COMPLIANCE_RELOAD_MINUTES"),
+		TravelRuleEnabled:               viper.GetBool("TRAVEL_RULE_ENABLED"),
+		TravelRuleThresholdUSD:          viper.GetString("TRAVEL_RULE_THRESHOLD_USD"),
+		TravelRuleOriginatingVASPID:     viper.GetString("TRAVEL_RULE_ORIGINATING_VASP_ID"),
+		TravelRuleVASPDirectoryJSON:     viper.GetString("TRAVEL_RULE_VASP_DIRECTORY_JSON"),
 		FraudDetectionEnabled:           viper.GetBool("FRAUD_DETECTION_ENABLED"),
 		PagerDutySecurityRoutingKey:     viper.GetString("PAGERDUTY_SECURITY_ROUTING_KEY"),
 		PagerDutyComplianceRoutingKey:   viper.GetString("PAGERDUTY_COMPLIANCE_ROUTING_KEY"),
