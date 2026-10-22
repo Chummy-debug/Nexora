@@ -48,3 +48,5 @@ Every submitted transaction is recorded in `custodial_sweeps` with its hash, fee
 ## Operational notes
 
 A run is registered with a 30-minute uniqueness lock so a long scan is never overlapped by the next tick. A transfer created between the pending-transfer check and submission can fail for lack of funds; it is not lost, and the next run sees the new balances. The sweep never creates trustlines on the master address; add them there first for every asset you want collected.
+
+The sweep is skipped while any row exists in `sweep_halts`; the zero-sum ledger invariant checker (#117) inserts one when tenant balances plus accumulated fees stop matching the pooled reserves, and removes it once the books balance again. If the halt state cannot be read, the run is skipped and retried.

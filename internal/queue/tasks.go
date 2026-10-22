@@ -33,6 +33,9 @@ const (
 	TypeCustodialSweep = "wallet:custodial_sweep"
 	// TypeConsolidateWallets executes one accepted wallet consolidation.
 	TypeConsolidateWallets = "wallet:consolidate"
+	// TypeLedgerInvariant verifies the zero-sum invariant across tenant
+	// balances, accumulated fees and pooled reserves.
+	TypeLedgerInvariant = "reconcile:ledger_invariant"
 )
 
 type TraceContext struct {

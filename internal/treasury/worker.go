@@ -16,9 +16,16 @@ type CustodialSweeper interface {
 	SweepAll(ctx context.Context) (wallet.SweepReport, error)
 }
 
+// SweepGuard reports whether automated sweeps are halted, e.g. by the
+// zero-sum ledger invariant checker. postgres.InvariantRepo satisfies it.
+type SweepGuard interface {
+	SweepsHalted(ctx context.Context) (halted bool, reason string, err error)
+}
+
 type Worker struct {
 	svc     Service
 	sweeper CustodialSweeper
+	guard   SweepGuard
 }
 
 func NewWorker(svc Service) *Worker {
@@ -33,6 +40,32 @@ func (w *Worker) WithCustodialSweeper(s CustodialSweeper) *Worker {
 	return w
 }
 
+// WithSweepGuard makes both automated sweeps consult guard before moving any
+// funds. Without one the sweeps run as before.
+func (w *Worker) WithSweepGuard(g SweepGuard) *Worker {
+	w.guard = g
+	return w
+}
+
+// sweepsHalted fails closed: when the halt state cannot be read the sweep is
+// skipped and the error returned, because moving funds while the ledger
+// might be corrupt is worse than a delayed sweep.
+func (w *Worker) sweepsHalted(ctx context.Context, sweep string) (bool, error) {
+	if w.guard == nil {
+		return false, nil
+	}
+	logger := tracing.Logger(ctx)
+	halted, reason, err := w.guard.SweepsHalted(ctx)
+	if err != nil {
+		logger.Error().Err(err).Str("sweep", sweep).Msg("sweep halt check failed; skipping sweep")
+		return true, err
+	}
+	if halted {
+		logger.Warn().Str("sweep", sweep).Str("reason", reason).Msg("automated sweep halted; skipping run")
+	}
+	return halted, nil
+}
+
 // HandleSweep is registered against the periodic "treasury:sweep" task,
 // which asynq's scheduler enqueues once a day (see cmd/worker/main.go). For
 // every asset with auto-sweep enabled it sweeps whatever is above the
@@ -44,6 +77,10 @@ func (w *Worker) HandleSweep(ctx context.Context, task *asynq.Task) error {
 	ctx = queue.ContextFromTask(ctx, task)
 	ctx, span := tracing.StartConsumer(ctx, task.Type())
 	defer span.End()
+
+	if halted, err := w.sweepsHalted(ctx, "treasury"); halted {
+		return err
+	}
 
 	configs, err := w.svc.GetConfig(ctx)
 	if err != nil {
@@ -91,6 +128,10 @@ func (w *Worker) HandleCustodialSweep(ctx context.Context, task *asynq.Task) err
 	ctx = queue.ContextFromTask(ctx, task)
 	ctx, span := tracing.StartConsumer(ctx, task.Type())
 	defer span.End()
+
+	if halted, err := w.sweepsHalted(ctx, "custodial"); halted {
+		return err
+	}
 
 	report, err := w.sweeper.SweepAll(ctx)
 	logger := tracing.Logger(ctx)

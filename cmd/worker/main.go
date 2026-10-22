@@ -289,7 +289,10 @@ func main() {
 		cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer,
 		treasury.OptionsFromConfig(cfg.TreasuryBaseReserve, cfg.TreasuryReserveCacheTTLSec, cfg.TreasuryReserveConcurrency)...,
 	)
-	treasuryWorker := treasury.NewWorker(treasurySvc)
+	// The zero-sum ledger invariant checker (#117) halts automated sweeps
+	// through sweep_halts; both sweep handlers consult it before moving funds.
+	invariantRepo := postgres.NewInvariantRepo(repoDB)
+	treasuryWorker := treasury.NewWorker(treasurySvc).WithSweepGuard(invariantRepo)
 	// Executes consolidations accepted by the API (#95).
 	consolidator := wallet.NewConsolidator(walletRepo, wallet.NewConsolidationRepository(repoDB), wallet.NewClosureRepository(repoDB),
 		stellarClient, signer, audit.NewService(postgres.NewAuditRepo(repoDB)), nil).
@@ -416,7 +419,8 @@ func main() {
 			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
 		)
 	}
-	reconcileWorker := reconcile.NewWorker(reconcileSvc)
+	reconcileWorker := reconcile.NewWorker(reconcileSvc).
+		WithInvariantChecker(reconcile.NewInvariantChecker(invariantRepo, invariantRepo, alertClient))
 
 	srv := asynq.NewServer(asynqOpt, asynq.Config{
 
@@ -434,6 +438,7 @@ func main() {
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
 	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
+	mux.HandleFunc(queue.TypeLedgerInvariant, reconcileWorker.HandleLedgerInvariant)
 	mux.HandleFunc(queue.TypeForceSettle, reconcileWorker.HandleForceSettle)
 	mux.HandleFunc(queue.TypeReconcileWallet, reconcileWorker.HandleWalletReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
@@ -460,6 +465,15 @@ func main() {
 	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@every 1m", reconcileTask); err != nil {
 		log.Fatal().Err(err).Msg("register reconcile scheduler")
+	}
+
+	// The zero-sum ledger invariant is verified every 60 seconds on the
+	// low-priority queue. Unique stops runs piling up behind a backlog, and
+	// no retries are needed because the next tick re-evaluates anyway.
+	invariantTask := asynq.NewTask(queue.TypeLedgerInvariant, nil,
+		asynq.Queue("low"), asynq.MaxRetry(0), asynq.Timeout(30*time.Second), asynq.Unique(55*time.Second))
+	if _, err := scheduler.Register("@every 60s", invariantTask); err != nil {
+		log.Fatal().Err(err).Msg("register ledger invariant scheduler")
 	}
 
 	// Balance drift snapshots are refreshed hourly; discrepancies are flagged
