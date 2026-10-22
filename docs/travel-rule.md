@@ -67,6 +67,8 @@ Set `TRAVEL_RULE_ENABLED=true` and provide
 - `endpoint`: operator-configured HTTPS endpoint
 - `encryption_public_key`: 32-byte X25519 public key, base64url
 - `confirmation_public_key`: 32-byte Ed25519 public key, base64url
+- `bearer_token` (optional): counterparty bearer token, supplied from secret management
+- `client_cert_file` and `client_key_file` (optional pair): client certificate/key paths for mTLS
 
 Endpoints and keys are not accepted from client requests. Encryption uses an
 ephemeral X25519 key, HKDF-SHA256 and AES-256-GCM with transfer/message routing
@@ -91,6 +93,6 @@ The sender provides distinct TRP and OpenVASP HTTP envelope profiles at the
 configured partner endpoint. These profiles are a transport integration seam,
 not a certification that every vendor's API, authentication or mTLS setup is
 identical. Before production use, configure the actual counterparty endpoint,
-authentication/mTLS and wire profile required by that VASP. Thresholds and
+bearer token, client certificate/key for mTLS, and wire profile required by that VASP. Never commit real keys or bearer tokens to source control. Thresholds and
 required fields vary by jurisdiction; this code is an engineering control, not
 a legal compliance certification.

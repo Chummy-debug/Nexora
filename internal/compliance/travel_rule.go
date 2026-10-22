@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,9 @@ type VASP struct {
 	Endpoint              string `json:"endpoint"`
 	EncryptionPublicKey   string `json:"encryption_public_key"`
 	ConfirmationPublicKey string `json:"confirmation_public_key"`
+	BearerToken           string `json:"bearer_token,omitempty"`
+	ClientCertFile        string `json:"client_cert_file,omitempty"`
+	ClientKeyFile         string `json:"client_key_file,omitempty"`
 }
 
 type VASPDirectory map[string]VASP
@@ -66,6 +70,9 @@ func LoadVASPDirectory(raw string) (VASPDirectory, error) {
 		vasp.Endpoint = strings.TrimSpace(vasp.Endpoint)
 		if _, exists := directory[vasp.ID]; exists {
 			return nil, fmt.Errorf("duplicate VASP ID %q", vasp.ID)
+		}
+		if (vasp.ClientCertFile == "") != (vasp.ClientKeyFile == "") {
+			return nil, fmt.Errorf("VASP %q must configure both client_cert_file and client_key_file for mTLS", vasp.ID)
 		}
 		if vasp.Protocol != TravelRuleProtocolTRP && vasp.Protocol != TravelRuleProtocolOpenVASP {
 			return nil, fmt.Errorf("unsupported Travel Rule protocol for VASP %q", vasp.ID)
@@ -535,6 +542,46 @@ func NewHTTPExchangeSender() *HTTPExchangeSender {
 	}}
 }
 
+func (s *HTTPExchangeSender) clientFor(recipient VASP) (*http.Client, error) {
+	base := s.client
+	if base == nil {
+		base = NewHTTPExchangeSender().client
+	}
+	if recipient.ClientCertFile == "" && recipient.ClientKeyFile == "" {
+		return base, nil
+	}
+	certificate, err := tls.LoadX509KeyPair(recipient.ClientCertFile, recipient.ClientKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load VASP mTLS client certificate: %w", err)
+	}
+	var transport *http.Transport
+	if base.Transport == nil {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("default HTTP transport does not support mTLS")
+		}
+		transport = defaultTransport.Clone()
+	} else {
+		existing, ok := base.Transport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("configured HTTP transport does not support mTLS")
+		}
+		transport = existing.Clone()
+	}
+	tlsConfig := transport.TLSClientConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+		if tlsConfig.MinVersion < tls.VersionTLS12 {
+			tlsConfig.MinVersion = tls.VersionTLS12
+		}
+	}
+	tlsConfig.Certificates = []tls.Certificate{certificate}
+	transport.TLSClientConfig = tlsConfig
+	return &http.Client{Transport: transport, Timeout: base.Timeout, CheckRedirect: base.CheckRedirect}, nil
+}
+
 func (s *HTTPExchangeSender) Send(ctx context.Context, recipient VASP, envelope TravelRuleEnvelope) (*domain.TravelRuleConfirmation, error) {
 	var body interface{}
 	switch recipient.Protocol {
@@ -564,9 +611,12 @@ func (s *HTTPExchangeSender) Send(ctx context.Context, recipient VASP, envelope 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Travel-Rule-Protocol", recipient.Protocol)
 	req.Header.Set("Idempotency-Key", envelope.MessageID)
-	client := s.client
-	if client == nil {
-		client = NewHTTPExchangeSender().client
+	if recipient.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+recipient.BearerToken)
+	}
+	client, err := s.clientFor(recipient)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {

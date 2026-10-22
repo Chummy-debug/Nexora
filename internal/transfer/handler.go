@@ -50,13 +50,13 @@ func (h *Handler) TransactionRoutes() func(r chi.Router) {
 }
 
 type createTransferRequest struct {
-	FromWalletID      string   `json:"from_wallet_id" validate:"required,uuid"`
-	ToWalletID        string   `json:"to_wallet_id"   validate:"required,uuid"`
-	Asset             string   `json:"asset"          validate:"required"`
-	Amount            string   `json:"amount"         validate:"required"`
-	Reference         string   `json:"reference,omitempty"`
-	ExternalReference *string  `json:"external_reference,omitempty"`
-	Tags              []string `json:"tags,omitempty"`
+	FromWalletID      string                    `json:"from_wallet_id" validate:"required,uuid"`
+	ToWalletID        string                    `json:"to_wallet_id"   validate:"required,uuid"`
+	Asset             string                    `json:"asset"          validate:"required"`
+	Amount            string                    `json:"amount"         validate:"required"`
+	Reference         string                    `json:"reference,omitempty"`
+	ExternalReference *string                   `json:"external_reference,omitempty"`
+	Tags              []string                  `json:"tags,omitempty"`
 	TravelRule        *domain.TravelRuleRequest `json:"travel_rule,omitempty"`
 }
 

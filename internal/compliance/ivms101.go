@@ -18,8 +18,8 @@ var ErrInvalidIVMS101 = errors.New("invalid IVMS 101 payload")
 type IVMS101Payload struct {
 	Originator      IVMS101Originator  `json:"originator"`
 	Beneficiary     IVMS101Beneficiary `json:"beneficiary"`
-	OriginatingVASP json.RawMessage   `json:"originatingVASP,omitempty"`
-	BeneficiaryVASP json.RawMessage   `json:"beneficiaryVASP,omitempty"`
+	OriginatingVASP json.RawMessage    `json:"originatingVASP,omitempty"`
+	BeneficiaryVASP json.RawMessage    `json:"beneficiaryVASP,omitempty"`
 }
 
 type IVMS101Originator struct {

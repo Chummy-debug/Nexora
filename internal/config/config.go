@@ -84,7 +84,7 @@ type Config struct {
 	TravelRuleThresholdUSD          string
 	TravelRuleOriginatingVASPID     string
 	TravelRuleVASPDirectoryJSON     string
-}	// Fraud detection observes reconciliation discrepancies for statistical
+	// Fraud detection observes reconciliation discrepancies for statistical
 	// frequency anomalies and micro-variance skimming.
 	FraudDetectionEnabled         bool
 	PagerDutySecurityRoutingKey   string
