@@ -136,3 +136,70 @@ func TestHandleCustodialSweep_NoSweeperIsANoop(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+type fakeGuard struct {
+	halted bool
+	err    error
+	calls  int
+}
+
+func (f *fakeGuard) SweepsHalted(context.Context) (bool, string, error) {
+	f.calls++
+	return f.halted, "ledger_invariant: XLM imbalance", f.err
+}
+
+func sweepableService() *fakeService {
+	return &fakeService{
+		configs:   []*treasury.Config{{Asset: "XLM", SweepThreshold: decimal.NewFromInt(1), AutoSweepEnabled: true, ColdStorageAddress: "GCOLD"}},
+		sweepable: map[string]decimal.Decimal{"XLM": decimal.NewFromInt(100)},
+	}
+}
+
+func TestHandleSweep_HaltedByInvariantSkipsAllAssets(t *testing.T) {
+	svc := sweepableService()
+	guard := &fakeGuard{halted: true}
+	w := treasury.NewWorker(svc).WithSweepGuard(guard)
+
+	if err := w.HandleSweep(context.Background(), &asynq.Task{}); err != nil {
+		t.Fatalf("a halted sweep is not a failure, got %v", err)
+	}
+	if guard.calls != 1 || len(svc.sweepCalls) != 0 {
+		t.Fatalf("expected no sweeps while halted, got %+v", svc.sweepCalls)
+	}
+}
+
+func TestHandleSweep_GuardErrorFailsClosed(t *testing.T) {
+	svc := sweepableService()
+	w := treasury.NewWorker(svc).WithSweepGuard(&fakeGuard{err: errors.New("db down")})
+
+	if err := w.HandleSweep(context.Background(), &asynq.Task{}); err == nil {
+		t.Fatal("expected the halt-check error to be returned")
+	}
+	if len(svc.sweepCalls) != 0 {
+		t.Fatalf("expected no sweeps when the halt state is unknown, got %+v", svc.sweepCalls)
+	}
+}
+
+func TestHandleSweep_NotHaltedSweeps(t *testing.T) {
+	svc := sweepableService()
+	w := treasury.NewWorker(svc).WithSweepGuard(&fakeGuard{})
+
+	if err := w.HandleSweep(context.Background(), &asynq.Task{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(svc.sweepCalls) != 1 {
+		t.Fatalf("expected one sweep, got %+v", svc.sweepCalls)
+	}
+}
+
+func TestHandleCustodialSweep_HaltedByInvariantSkipsSweeper(t *testing.T) {
+	sweeper := &fakeSweeper{}
+	w := treasury.NewWorker(&fakeService{}).WithCustodialSweeper(sweeper).WithSweepGuard(&fakeGuard{halted: true})
+
+	if err := w.HandleCustodialSweep(context.Background(), asynq.NewTask("wallet:custodial_sweep", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sweeper.calls != 0 {
+		t.Fatalf("custodial sweeper ran %d times while halted", sweeper.calls)
+	}
+}
