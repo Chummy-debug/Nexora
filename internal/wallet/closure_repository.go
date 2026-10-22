@@ -164,8 +164,14 @@ func (r *closureRepository) Fail(ctx context.Context, id string, reason error) e
 }
 
 func (r *closureRepository) CountPendingTransfers(ctx context.Context, walletID string) (int, error) {
+	return countPendingTransfers(ctx, r.db, walletID)
+}
+
+// countPendingTransfers counts non-terminal transfers into or out of a wallet.
+// Closure and sweep both refuse to touch a wallet with funds in flight.
+func countPendingTransfers(ctx context.Context, db ClosureDB, walletID string) (int, error) {
 	var n int
-	err := r.db.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM transactions
 		WHERE (from_wallet = $1 OR to_wallet = $1)
@@ -180,12 +186,10 @@ func (r *closureRepository) CountPendingTransfers(ctx context.Context, walletID 
 func (r *closureRepository) GetCustodySettings(ctx context.Context, tenantID string, mode domain.Mode) (*domain.TenantCustodySettings, error) {
 	s := &domain.TenantCustodySettings{}
 	err := r.db.QueryRow(ctx, `
-		SELECT tenant_id, mode, master_address, primary_settlement_wallet_id,
-		       updated_by, created_at, updated_at
+		SELECT `+custodySettingsColumns+`
 		FROM tenant_custody_settings
 		WHERE tenant_id = $1 AND mode = $2
-	`, tenantID, mode).Scan(&s.TenantID, &s.Mode, &s.MasterAddress, &s.PrimarySettlementWalletID,
-		&s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt)
+	`, tenantID, mode).Scan(custodySettingsDest(s)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrCustodySettingsNotFound
 	}
@@ -198,20 +202,29 @@ func (r *closureRepository) GetCustodySettings(ctx context.Context, tenantID str
 func (r *closureRepository) UpsertCustodySettings(ctx context.Context, s *domain.TenantCustodySettings) error {
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO tenant_custody_settings
-		(tenant_id, mode, master_address, primary_settlement_wallet_id, updated_by)
-		VALUES ($1, $2, $3, $4, $5)
+		(tenant_id, mode, master_address, primary_settlement_wallet_id, auto_sweep_enabled, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (tenant_id, mode) DO UPDATE
 		SET master_address = EXCLUDED.master_address,
 		    primary_settlement_wallet_id = EXCLUDED.primary_settlement_wallet_id,
+		    auto_sweep_enabled = EXCLUDED.auto_sweep_enabled,
 		    updated_by = EXCLUDED.updated_by,
 		    updated_at = NOW()
 		RETURNING created_at, updated_at
-	`, s.TenantID, s.Mode, s.MasterAddress, s.PrimarySettlementWalletID, s.UpdatedBy).
+	`, s.TenantID, s.Mode, s.MasterAddress, s.PrimarySettlementWalletID, s.AutoSweepEnabled, s.UpdatedBy).
 		Scan(&s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert custody settings: %w", err)
 	}
 	return nil
+}
+
+const custodySettingsColumns = `tenant_id, mode, master_address, primary_settlement_wallet_id,
+	auto_sweep_enabled, updated_by, created_at, updated_at`
+
+func custodySettingsDest(s *domain.TenantCustodySettings) []interface{} {
+	return []interface{}{&s.TenantID, &s.Mode, &s.MasterAddress, &s.PrimarySettlementWalletID,
+		&s.AutoSweepEnabled, &s.UpdatedBy, &s.CreatedAt, &s.UpdatedAt}
 }
 
 func scanClosure(row pgx.Row) (*domain.AccountClosure, error) {

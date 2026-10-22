@@ -225,9 +225,18 @@ func (c *Closer) GetCustodySettings(ctx context.Context) (*domain.TenantCustodyS
 	return c.closures.GetCustodySettings(ctx, tenant.IDFromContext(ctx), tenant.ModeOrDefault(ctx, domain.ModeLive))
 }
 
-// SetCustodySettings validates and stores the master address and primary
-// settlement wallet for the calling tenant and request mode.
-func (c *Closer) SetCustodySettings(ctx context.Context, masterAddress string, primarySettlementWalletID *string) (*domain.TenantCustodySettings, error) {
+// CustodySettingsInput is the full replacement for a tenant's custody
+// settings in the request mode.
+type CustodySettingsInput struct {
+	MasterAddress             string
+	PrimarySettlementWalletID *string
+	AutoSweepEnabled          bool
+}
+
+// SetCustodySettings validates and stores the master address, primary
+// settlement wallet and sweep opt-in for the calling tenant and request mode.
+func (c *Closer) SetCustodySettings(ctx context.Context, in CustodySettingsInput) (*domain.TenantCustodySettings, error) {
+	masterAddress, primarySettlementWalletID := in.MasterAddress, in.PrimarySettlementWalletID
 	tenantID := tenant.IDFromContext(ctx)
 	_, actorID := closureOperator(ctx)
 	if tenantID == "" || actorID == "" {
@@ -253,12 +262,13 @@ func (c *Closer) SetCustodySettings(ctx context.Context, masterAddress string, p
 		Mode:                      tenant.ModeOrDefault(ctx, domain.ModeLive),
 		MasterAddress:             masterAddress,
 		PrimarySettlementWalletID: primarySettlementWalletID,
+		AutoSweepEnabled:          in.AutoSweepEnabled,
 		UpdatedBy:                 actorID,
 	}
 	if err := c.closures.UpsertCustodySettings(ctx, settings); err != nil {
 		return nil, err
 	}
-	metadata := map[string]interface{}{"master_address": masterAddress}
+	metadata := map[string]interface{}{"master_address": masterAddress, "auto_sweep_enabled": in.AutoSweepEnabled}
 	if primarySettlementWalletID != nil {
 		metadata["primary_settlement_wallet_id"] = *primarySettlementWalletID
 	}
@@ -419,7 +429,7 @@ func (c *Closer) sign(ctx context.Context, tx *txnbuild.Transaction, encryptedSe
 	if signer == nil {
 		return nil, errors.New("no signer configured")
 	}
-	return signer.Sign(tx, encryptedSecret)
+	return signWithStoredSecret(signer, tx, encryptedSecret)
 }
 
 // closureOperator identifies the authenticated principal performing the

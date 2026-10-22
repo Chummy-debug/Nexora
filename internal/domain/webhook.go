@@ -12,6 +12,7 @@ const (
 	EventTransferFailed         = "transfer.failed"
 	EventWalletFunded           = "wallet.funded"
 	EventWalletBalanceLow       = "wallet.balance.low"
+	EventWalletSwept            = "wallet.swept"
 	EventTreasurySweepCompleted = "treasury.sweep_completed"
 	EventReconciliationDrift    = "reconciliation.drift"
 
@@ -36,6 +37,7 @@ var SupportedEventTypes = []string{
 	EventTransferFailed,
 	EventWalletBalanceLow,
 	EventWalletFunded,
+	EventWalletSwept,
 	EventTreasurySweepCompleted,
 	EventReconciliationDrift,
 	EventTransferComplianceHold,

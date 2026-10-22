@@ -360,6 +360,8 @@ type closeWalletRequest struct {
 type custodySettingsRequest struct {
 	MasterAddress             string  `json:"master_address" validate:"required"`
 	PrimarySettlementWalletID *string `json:"primary_settlement_wallet_id,omitempty"`
+	// AutoSweepEnabled opts the tenant in to the automated deposit sweep.
+	AutoSweepEnabled bool `json:"auto_sweep_enabled"`
 }
 
 func (h *Handler) closeWallet(w http.ResponseWriter, r *http.Request) {
@@ -429,7 +431,11 @@ func (h *Handler) putCustodySettings(w http.ResponseWriter, r *http.Request) {
 		api.BadRequest(w, err.Error())
 		return
 	}
-	settings, err := h.closer.SetCustodySettings(r.Context(), req.MasterAddress, req.PrimarySettlementWalletID)
+	settings, err := h.closer.SetCustodySettings(r.Context(), CustodySettingsInput{
+		MasterAddress:             req.MasterAddress,
+		PrimarySettlementWalletID: req.PrimarySettlementWalletID,
+		AutoSweepEnabled:          req.AutoSweepEnabled,
+	})
 	if err != nil {
 		api.HandleDomainError(w, err)
 		return

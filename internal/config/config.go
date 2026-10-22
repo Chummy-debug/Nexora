@@ -50,6 +50,9 @@ type Config struct {
 	TreasuryReserveCacheTTLSec      int
 	TreasuryReserveConcurrency      int
 	AuditChainVerifyIntervalSec     int
+	CustodialSweepThresholds        string
+	CustodialSweepInterval          string
+	CustodialSweepConcurrency       int
 	FlutterwaveSecretKey            string
 	FlutterwaveWebhookHash          string
 	BalanceDiscrepancyThreshold     string
@@ -321,6 +324,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("TREASURY_BASE_RESERVE", "0.5")
 	viper.SetDefault("TREASURY_RESERVE_CACHE_TTL_SECONDS", "120")
 	viper.SetDefault("TREASURY_RESERVE_CONCURRENCY", "16")
+	viper.SetDefault("CUSTODIAL_SWEEP_INTERVAL", "@every 15m")
+	viper.SetDefault("CUSTODIAL_SWEEP_CONCURRENCY", "8")
 	viper.SetDefault("WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false")
 	viper.SetDefault("IDEMPOTENCY_TTL_HOURS", "24")
 	viper.SetDefault("INDEXER_PAYMENTS_PAGE_LIMIT", "50")
@@ -435,6 +440,9 @@ func Load() (*Config, error) {
 		TreasuryBaseReserve:             viper.GetString("TREASURY_BASE_RESERVE"),
 		TreasuryReserveCacheTTLSec:      viper.GetInt("TREASURY_RESERVE_CACHE_TTL_SECONDS"),
 		TreasuryReserveConcurrency:      viper.GetInt("TREASURY_RESERVE_CONCURRENCY"),
+		CustodialSweepThresholds:        viper.GetString("CUSTODIAL_SWEEP_THRESHOLDS"),
+		CustodialSweepInterval:          viper.GetString("CUSTODIAL_SWEEP_INTERVAL"),
+		CustodialSweepConcurrency:       viper.GetInt("CUSTODIAL_SWEEP_CONCURRENCY"),
 		FlutterwaveSecretKey:            viper.GetString("FLUTTERWAVE_SECRET_KEY"),
 		FlutterwaveWebhookHash:          viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
 		BalanceDiscrepancyThreshold:     viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),

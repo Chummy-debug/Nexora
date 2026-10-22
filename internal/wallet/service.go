@@ -365,10 +365,24 @@ func (s *service) signerFor(ctx context.Context) stellar.Signer {
 }
 
 func (s *service) sign(ctx context.Context, tx *txnbuild.Transaction, encryptedSecret string) (*txnbuild.Transaction, error) {
-	if signer := s.signerFor(ctx); signer != nil {
-		return signer.Sign(tx, encryptedSecret)
+	signer := s.signerFor(ctx)
+	if signer == nil {
+		signer = stellar.NewEnvSigner(s.masterKey, s.stellarNetwork)
 	}
-	return stellar.NewEnvSigner(s.masterKey, s.stellarNetwork).Sign(tx, encryptedSecret)
+	return signWithStoredSecret(signer, tx, encryptedSecret)
+}
+
+// signWithStoredSecret signs with a wallet's encrypted_secret column. The
+// column holds the hex encoding of the crypto envelope (see CreateWallet),
+// while Signer expects the envelope itself, as the settlement engine and
+// claimable service already decode it. A value that is not hex is passed
+// through unchanged so a secret stored as a raw envelope still signs.
+func signWithStoredSecret(signer stellar.Signer, tx *txnbuild.Transaction, stored string) (*txnbuild.Transaction, error) {
+	envelope := stored
+	if decoded, err := hex.DecodeString(stored); err == nil {
+		envelope = string(decoded)
+	}
+	return signer.Sign(tx, envelope)
 }
 
 func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer, limit string) (string, error) {

@@ -891,8 +891,9 @@ paths:
       summary: Set custody settings
       description: |
         Sets the tenant master address that receives the reserves of closed
-        wallets, and the primary settlement wallet that can never be closed,
-        for the request's live/test mode. Owner or Admin role required.
+        wallets and, when auto_sweep_enabled is set, swept customer deposits;
+        and the primary settlement wallet, which is never closed or swept.
+        Applies to the request's live/test mode. Owner or Admin role required.
       tags:
       - Wallets
       requestBody:
@@ -904,6 +905,7 @@ paths:
             example:
               master_address: GA5ZSEJ6BHT2ZKGDABICHI62W25ZJUXUNFFYGLYTIEXP6CZMUWqmOvxM
               primary_settlement_wallet_id: 3f1c2b7e-8d4a-4f0e-9a51-6c2d8e7b1a90
+              auto_sweep_enabled: true
       responses:
         '200':
           description: Settings stored
@@ -3521,6 +3523,14 @@ components:
         primary_settlement_wallet_id:
           type: string
           nullable: true
+        auto_sweep_enabled:
+          type: boolean
+          default: false
+          description: |
+            Opt in to the automated deposit sweep, which moves balances above
+            the operator-configured thresholds from the tenant's custodial
+            wallets into master_address, leaving each wallet its minimum
+            reserve. Emits wallet.swept per swept wallet.
     CustodySettings:
       type: object
       properties:
@@ -3533,6 +3543,8 @@ components:
         primary_settlement_wallet_id:
           type: string
           nullable: true
+        auto_sweep_enabled:
+          type: boolean
         updated_by:
           type: string
         created_at:
@@ -4502,6 +4514,7 @@ components:
             - transfer.settled
             - transfer.failed
             - wallet.funded
+            - wallet.swept
             - conversion.completed
           description: 'Event types to subscribe to. Omit or pass an empty array to
 
@@ -4561,6 +4574,7 @@ components:
           - transfer.settled
           - transfer.failed
           - wallet.funded
+          - wallet.swept
           - conversion.completed
         status:
           type: string

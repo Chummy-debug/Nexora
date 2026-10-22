@@ -471,19 +471,19 @@ func TestSetCustodySettings(t *testing.T) {
 	f := newClosureFixture(t)
 	f.store.settings = nil
 
-	if _, err := f.closer.SetCustodySettings(operatorCtx(), "not-an-address", nil); !errors.Is(err, domain.ErrInvalidMasterAddress) {
+	if _, err := f.closer.SetCustodySettings(operatorCtx(), CustodySettingsInput{MasterAddress: "not-an-address"}); !errors.Is(err, domain.ErrInvalidMasterAddress) {
 		t.Fatalf("want ErrInvalidMasterAddress, got %v", err)
 	}
 	foreign := "w-unknown"
-	if _, err := f.closer.SetCustodySettings(operatorCtx(), f.master, &foreign); !errors.Is(err, domain.ErrWalletNotFound) {
+	if _, err := f.closer.SetCustodySettings(operatorCtx(), CustodySettingsInput{MasterAddress: f.master, PrimarySettlementWalletID: &foreign}); !errors.Is(err, domain.ErrWalletNotFound) {
 		t.Fatalf("want ErrWalletNotFound for unknown settlement wallet, got %v", err)
 	}
 
-	settings, err := f.closer.SetCustodySettings(operatorCtx(), f.master, &f.wallet.ID)
+	settings, err := f.closer.SetCustodySettings(operatorCtx(), CustodySettingsInput{MasterAddress: f.master, PrimarySettlementWalletID: &f.wallet.ID, AutoSweepEnabled: true})
 	if err != nil {
 		t.Fatalf("set settings: %v", err)
 	}
-	if settings.UpdatedBy != "operator-7" || settings.Mode != domain.ModeLive || f.store.settings != settings {
+	if settings.UpdatedBy != "operator-7" || settings.Mode != domain.ModeLive || !settings.AutoSweepEnabled || f.store.settings != settings {
 		t.Fatalf("settings not stored with operator and mode: %+v", settings)
 	}
 	if len(f.audit.events) != 1 || f.audit.events[0].Action != AuditActionCustodySettings {

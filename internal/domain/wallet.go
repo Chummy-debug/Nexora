@@ -114,8 +114,48 @@ type TenantCustodySettings struct {
 	MasterAddress string `json:"master_address"`
 	// PrimarySettlementWalletID is the wallet the tenant settles through; it
 	// can never be closed.
-	PrimarySettlementWalletID *string   `json:"primary_settlement_wallet_id,omitempty"`
-	UpdatedBy                 string    `json:"updated_by"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
+	PrimarySettlementWalletID *string `json:"primary_settlement_wallet_id,omitempty"`
+	// AutoSweepEnabled opts the tenant's custodial wallets in to the
+	// automated reserve sweep into MasterAddress.
+	AutoSweepEnabled bool      `json:"auto_sweep_enabled"`
+	UpdatedBy        string    `json:"updated_by"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// Custodial sweep transaction states.
+const (
+	SweepStatusCompleted = "completed"
+	SweepStatusFailed    = "failed"
+)
+
+// CustodialSweep records one batched sweep transaction that moved customer
+// deposits from custodial wallets into the tenant master address.
+type CustodialSweep struct {
+	ID                 string      `json:"id"`
+	TenantID           string      `json:"tenant_id"`
+	Mode               Mode        `json:"mode"`
+	DestinationAddress string      `json:"destination_address"`
+	TransactionHash    *string     `json:"transaction_hash,omitempty"`
+	Status             string      `json:"status"`
+	FeeStroops         int64       `json:"fee_stroops"`
+	Items              []SweepItem `json:"items"`
+	ErrorMessage       *string     `json:"error_message,omitempty"`
+	CreatedAt          time.Time   `json:"created_at"`
+}
+
+// SweepItem is one asset moved out of one wallet by a sweep.
+type SweepItem struct {
+	WalletID  string `json:"wallet_id"`
+	PublicKey string `json:"public_key"`
+	AssetCode string `json:"asset_code"`
+	Issuer    string `json:"issuer,omitempty"`
+	// Amount is what was sent to the master address.
+	Amount string `json:"amount"`
+	// BalanceBefore is the wallet's balance of the asset when it was scanned.
+	BalanceBefore string `json:"balance_before"`
+	// Retained is the wallet's balance of the asset after the sweep: the
+	// minimum reserve and selling liabilities for XLM, open selling
+	// liabilities for other assets. The network fee is reported separately.
+	Retained string `json:"retained"`
 }
