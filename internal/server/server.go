@@ -206,6 +206,7 @@ func New(
 					r.Use(RequireScope(domain.ScopeAuditRead))
 					r.Get("/", auditHandler.List)
 					r.Get("/export", auditHandler.Export)
+					r.Get("/proofs/{tx_id}", auditHandler.Proof)
 				})
 			}
 
