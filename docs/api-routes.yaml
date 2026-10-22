@@ -64,6 +64,7 @@ routes:
   - "POST /v1/admin/compliance/reviews/{id}/approve"
   - "POST /v1/admin/compliance/reviews/{id}/reject"
   - POST /v1/admin/reconciliation/run
+  - POST /v1/admin/reconciliation/three-way
   - "PATCH /v1/admin/reconciliation/discrepancies/{id}"
   - "POST /v1/admin/transfers/{transferID}/force-settle"
   - POST /v1/auth/login

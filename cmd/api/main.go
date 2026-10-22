@@ -333,7 +333,9 @@ func main() {
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
 	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD))
-	reconcileHandler := reconcile.NewHandler(reconcileSvc)
+	reconcileHandler := reconcile.NewHandler(reconcileSvc).WithThreeWay(
+		reconcile.NewThreeWayService(postgres.NewThreeWayRepo(db), clientResolver), fiat.ReadSettlementReport,
+	)
 
 	authHandler := auth.NewHandler(authSvc)
 	orgHandler := org.NewHandler(orgSvc)
