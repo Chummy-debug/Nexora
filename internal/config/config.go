@@ -71,14 +71,30 @@ type Config struct {
 	YellowCardSandbox               bool
 	ComplianceEnabled               bool
 	OFACSDNURL                      string
+	UNSanctionsURL                  string
+	EUSanctionsURL                  string
+	ComplianceSimilarityThreshold   float64
 	ComplianceStructuringUnit       string
 	ComplianceVelocityMax           int
 	ComplianceVelocityWindowMin     int
 	ComplianceRoundTripMin          int
 	ComplianceFuzzyThreshold        int
 	ComplianceReloadMinutes         int
-	WorkerEnabled                   bool
-	WebhookAllowPrivateNetworks     bool
+	// Fraud detection observes reconciliation discrepancies for statistical
+	// frequency anomalies and micro-variance skimming.
+	FraudDetectionEnabled         bool
+	PagerDutySecurityRoutingKey   string
+	PagerDutyComplianceRoutingKey string
+	GeoIPDatabasePath             string
+	GeoScreenEnabled              bool
+	GeoBlockedCountries           string
+	GeoBlockVPN                   bool
+	GeoBlockTor                   bool
+	GeoBlockHosting               bool
+	GeoBlockProxy                 bool
+	GeoFailClosed                 bool
+	WorkerEnabled                 bool
+	WebhookAllowPrivateNetworks   bool
 	// RateLockExpiryInterval specifies the recurring interval for the rate lock expiration daemon (e.g. "@every 30s").
 	RateLockExpiryInterval string
 	// ClaimableBalanceSourceWalletID funds claimable balances whose request did
@@ -280,12 +296,22 @@ func Load() (*Config, error) {
 	viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
 	viper.SetDefault("COMPLIANCE_ENABLED", "true")
 	viper.SetDefault("OFAC_SDN_URL", "https://sanctionslistservice.ofac.treas.gov/api/download/sdn.xml")
+	viper.SetDefault("UN_SANCTIONS_URL", "https://scsanctions.un.org/resources/xml/en/consolidated.xml")
+	viper.SetDefault("EU_SANCTIONS_URL", "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content")
+	viper.SetDefault("COMPLIANCE_SIMILARITY_THRESHOLD", 0.85)
 	viper.SetDefault("COMPLIANCE_STRUCTURING_UNIT", "1000")
 	viper.SetDefault("COMPLIANCE_VELOCITY_MAX_TRANSFERS", "10")
 	viper.SetDefault("COMPLIANCE_VELOCITY_WINDOW_MINUTES", "10")
 	viper.SetDefault("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES", "60")
 	viper.SetDefault("COMPLIANCE_FUZZY_THRESHOLD", "2")
 	viper.SetDefault("COMPLIANCE_RELOAD_MINUTES", "15")
+	viper.SetDefault("FRAUD_DETECTION_ENABLED", "true")
+	viper.SetDefault("GEO_SCREEN_ENABLED", "false")
+	viper.SetDefault("GEO_BLOCK_VPN", "true")
+	viper.SetDefault("GEO_BLOCK_TOR", "true")
+	viper.SetDefault("GEO_BLOCK_HOSTING", "true")
+	viper.SetDefault("GEO_BLOCK_PROXY", "true")
+	viper.SetDefault("GEO_FAIL_CLOSED", "true")
 	viper.SetDefault("WORKER_ENABLED", "true")
 	viper.SetDefault("TREASURY_BASE_RESERVE", "0.5")
 	viper.SetDefault("TREASURY_RESERVE_CACHE_TTL_SECONDS", "120")
@@ -426,12 +452,26 @@ func Load() (*Config, error) {
 		YellowCardSandbox:               ycSandbox,
 		ComplianceEnabled:               complianceEnabled,
 		OFACSDNURL:                      viper.GetString("OFAC_SDN_URL"),
+		UNSanctionsURL:                  viper.GetString("UN_SANCTIONS_URL"),
+		EUSanctionsURL:                  viper.GetString("EU_SANCTIONS_URL"),
+		ComplianceSimilarityThreshold:   viper.GetFloat64("COMPLIANCE_SIMILARITY_THRESHOLD"),
 		ComplianceStructuringUnit:       viper.GetString("COMPLIANCE_STRUCTURING_UNIT"),
 		ComplianceVelocityMax:           viper.GetInt("COMPLIANCE_VELOCITY_MAX_TRANSFERS"),
 		ComplianceVelocityWindowMin:     viper.GetInt("COMPLIANCE_VELOCITY_WINDOW_MINUTES"),
 		ComplianceRoundTripMin:          viper.GetInt("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES"),
 		ComplianceFuzzyThreshold:        viper.GetInt("COMPLIANCE_FUZZY_THRESHOLD"),
 		ComplianceReloadMinutes:         viper.GetInt("COMPLIANCE_RELOAD_MINUTES"),
+		FraudDetectionEnabled:           viper.GetBool("FRAUD_DETECTION_ENABLED"),
+		PagerDutySecurityRoutingKey:     viper.GetString("PAGERDUTY_SECURITY_ROUTING_KEY"),
+		PagerDutyComplianceRoutingKey:   viper.GetString("PAGERDUTY_COMPLIANCE_ROUTING_KEY"),
+		GeoIPDatabasePath:               viper.GetString("GEOIP_DATABASE_PATH"),
+		GeoScreenEnabled:                viper.GetBool("GEO_SCREEN_ENABLED"),
+		GeoBlockedCountries:             viper.GetString("GEO_BLOCKED_COUNTRIES"),
+		GeoBlockVPN:                     viper.GetBool("GEO_BLOCK_VPN"),
+		GeoBlockTor:                     viper.GetBool("GEO_BLOCK_TOR"),
+		GeoBlockHosting:                 viper.GetBool("GEO_BLOCK_HOSTING"),
+		GeoBlockProxy:                   viper.GetBool("GEO_BLOCK_PROXY"),
+		GeoFailClosed:                   viper.GetBool("GEO_FAIL_CLOSED"),
 		WorkerEnabled:                   workerEnabled,
 		WebhookAllowPrivateNetworks:     webhookAllowPrivateNetworks,
 		IndexerPaymentsPageLimit:        viper.GetInt("INDEXER_PAYMENTS_PAGE_LIMIT"),

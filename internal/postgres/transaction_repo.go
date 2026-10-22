@@ -172,6 +172,63 @@ func (r *TransactionRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempo
 	return tx, err
 }
 
+// ListSettledBetween returns all settled transactions within [from, to) for the
+// daily Merkle audit tree.
+func (r *TransactionRepo) ListSettledBetween(ctx context.Context, from, to time.Time) ([]*domain.Transaction, error) {
+	rows, err := r.readDB().Query(ctx,
+		`SELECT id, COALESCE(tx_hash,''), type, status,
+		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
+		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, mode, created_at,
+		        COALESCE(requeue_count, 0), reconciled_at, batch_id, COALESCE(reference,''),
+		        external_reference, COALESCE(tags, '{}'),
+		        COALESCE(failure_reason,''), COALESCE(failure_message,''),
+		        COALESCE(idempotency_key,''), idempotency_record_id
+		 FROM transactions
+		 WHERE status = 'settled' AND created_at >= $1 AND created_at < $2 AND mode = $3
+		 ORDER BY created_at ASC, id ASC`,
+		from, to, transactionMode(ctx),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query settled transactions: %w", err)
+	}
+	defer rows.Close()
+
+	transactions := make([]*domain.Transaction, 0)
+	for rows.Next() {
+		tx := &domain.Transaction{}
+		var amount, fee string
+		var feeBps *int
+		var tenantID, batchID, recordID *string
+		var reference string
+		var externalRef *string
+		var tags []string
+		var failureReason, failureMessage, idempotencyKey string
+		if err := rows.Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
+			&tx.FromWallet, &tx.ToWallet, &tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.Mode,
+			&tx.CreatedAt, &tx.RequeueCount, &tx.ReconciledAt, &batchID, &reference,
+			&externalRef, &tags, &failureReason, &failureMessage, &idempotencyKey, &recordID,
+		); err != nil {
+			return nil, fmt.Errorf("scan settled transactions: %w", err)
+		}
+		tx.Amount, _ = decimal.NewFromString(amount)
+		tx.Fee, _ = decimal.NewFromString(fee)
+		if feeBps != nil {
+			tx.FeeBps = *feeBps
+		}
+		tx.TenantID = tenantID
+		tx.BatchID = batchID
+		tx.Reference = reference
+		tx.ExternalReference = externalRef
+		tx.Tags = tags
+		tx.FailureReason = failureReason
+		tx.FailureMessage = failureMessage
+		tx.IdempotencyKey = idempotencyKey
+		tx.IdempotencyRecordID = recordID
+		transactions = append(transactions, tx)
+	}
+	return transactions, rows.Err()
+}
+
 // GetByIdempotencyRecordID returns the transaction linked to the exact
 // idempotency generation. This is the recovery fence used after a process dies
 // after inserting a transfer but before completing the idempotency record.

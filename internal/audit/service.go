@@ -23,14 +23,20 @@ type Service interface {
 	Log(r *http.Request, action, resourceType, resourceID string, metadata map[string]interface{})
 	List(ctx context.Context, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
 	Export(ctx context.Context, filter domain.AuditFilter, format string) ([]byte, string, error)
+	Proof(ctx context.Context, txID string) (*SettlementProof, error)
 }
 
 type service struct {
-	repo *postgres.AuditRepo
+	repo       *postgres.AuditRepo
+	proofSource settlementProofSource
 }
 
-func NewService(repo *postgres.AuditRepo) Service {
-	return &service{repo: repo}
+func NewService(repo *postgres.AuditRepo, txRepos ...*postgres.TransactionRepo) Service {
+	var source settlementProofSource
+	if len(txRepos) > 0 && txRepos[0] != nil {
+		source = txRepos[0]
+	}
+	return &service{repo: repo, proofSource: source}
 }
 
 func (s *service) Record(ctx context.Context, event *domain.AuditEvent) error {
@@ -169,6 +175,13 @@ func (s *service) Export(ctx context.Context, filter domain.AuditFilter, format 
 		return nil, "", err
 	}
 	return data, "application/json", nil
+}
+
+func (s *service) Proof(ctx context.Context, txID string) (*SettlementProof, error) {
+	if s == nil || s.proofSource == nil {
+		return nil, ErrProofUnavailable
+	}
+	return GetProof(ctx, s.proofSource, txID)
 }
 
 func clientIP(r *http.Request) string {

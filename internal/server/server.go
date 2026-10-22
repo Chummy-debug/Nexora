@@ -86,6 +86,7 @@ func New(
 	var tenantDataHandler *tenantdata.Handler
 	var idempotencyHandler *idempotency.Handler
 	var scopeDenialRecorder ScopeDenialRecorder
+	var geoOptions GeoScreenOptions
 	for _, option := range options {
 		switch value := option.(type) {
 		case AuthRateLimitConfig:
@@ -106,6 +107,8 @@ func New(
 			idempotencyHandler = value
 		case ScopeDenialRecorder:
 			scopeDenialRecorder = value
+		case GeoScreenOptions:
+			geoOptions = value
 		}
 	}
 	authLimiter := NewAuthRateLimiter(rateCfg)
@@ -153,6 +156,11 @@ func New(
 	}
 
 	r.Route("/v1", func(r chi.Router) {
+		// Geo screening runs before authentication and tenant routing so a
+		// sanctioned or anonymized caller cannot probe authenticated endpoints.
+		if geoOptions.Screener != nil {
+			r.Use(GeoScreening(geoOptions))
+		}
 		// Unauthenticated public endpoints
 		if paymentLinkHandler != nil {
 			r.Route("/public/payment-links", paymentLinkHandler.PublicRoutes())
@@ -198,6 +206,7 @@ func New(
 					r.Use(RequireScope(domain.ScopeAuditRead))
 					r.Get("/", auditHandler.List)
 					r.Get("/export", auditHandler.Export)
+					r.Get("/proofs/{tx_id}", auditHandler.Proof)
 				})
 			}
 
