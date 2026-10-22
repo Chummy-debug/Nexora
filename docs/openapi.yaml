@@ -2433,6 +2433,56 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '500': {$ref: '#/components/responses/InternalServerError'}
+  /v1/admin/reconciliation/three-way:
+    post:
+      operationId: generateThreeWayReconciliation
+      summary: Reconcile a daily bank report with internal transfers and Horizon
+      description: |
+        Owner/admin only. Upload a normalized provider CSV with columns
+        reference,amount,currency,status,settled_at. Amounts are positive decimal
+        strings (up to 20 integer and 7 fractional digits), currencies are three
+        uppercase letters, status is settled/pending/failed, and settled_at is
+        RFC3339 within the requested UTC day. Maximum 4 MiB and 10000 rows.
+        Returns an XLSX workbook with Summary, All transfers, and Exceptions.
+        Reads the authenticated tenant and mode from the primary database and
+        selects that mode's Horizon client. Compares the day's created fiat
+        transfers plus older transfers referenced in the report. This is not a
+        scan of all Stellar activity; missing internal references have unknown
+        chain status. Horizon evidence is current at run time, not historical
+        as-of-day evidence. Provider-specific reports must first be normalized;
+        callers can schedule this endpoint after receiving a complete daily report.
+        No balances/statuses are changed. Network errors abort without a workbook.
+        Workbook references/amounts are text cells, never executable formulas.
+      tags: [Admin]
+      security:
+      - AdminAuth: []
+      parameters:
+      - name: date
+        in: query
+        required: true
+        schema: {type: string, format: date}
+      - name: provider
+        in: query
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: {type: string}
+            example: "reference,amount,currency,status,settled_at\nbank-123,100.01,NGN,settled,2026-10-22T10:00:00Z\n"
+      responses:
+        '200':
+          description: Audit workbook; exceptions include resolution recommendations
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+        '503':
+          description: Reconciliation service is not configured
   /v1/admin/reconciliation/summary:
     get:
       operationId: getReconciliationSummary
