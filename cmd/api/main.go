@@ -117,6 +117,7 @@ func main() {
 	}
 	redisClient := redis.NewUniversalClient(redisOpt)
 	defer redisClient.Close()
+	velocityLimiter := compliance.NewRedisVelocityLimiter(redisClient)
 
 	tenantRepo := postgres.NewTenantRepo(repoDB)
 	userRepo := postgres.NewUserRepo(repoDB)
@@ -191,6 +192,7 @@ func main() {
 		transfer.ConfigureStellarClient(transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo), stellarClient),
 		clientResolver,
 	)
+	transferSvc = transfer.ConfigureVelocityLimiter(transferSvc, velocityLimiter)
 	webhookSvc := webhook.NewService(webhookRepo, redisClient, queueClient, 120, cfg.WebhookAllowPrivateNetworks, cfg.MasterEncryptionKey)
 	if configSvc, ok := webhookSvc.(webhook.ConfigService); ok {
 		if err := configSvc.MigrateLegacySigningSecrets(ctx); err != nil {
@@ -291,7 +293,7 @@ func main() {
 			"USDC": cfg.StellarUSDCIssuer,
 			"EURC": cfg.StellarEURCIssuer,
 		}, cfg.PlatformFeeWalletPublicKey,
-	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver).WithVelocityLimiter(velocityLimiter)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
@@ -332,7 +334,9 @@ func main() {
 		decimal.Zero,
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
-	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD))
+	).WithDriftThreshold(reconcile.ParseDriftThreshold(cfg.ReconciliationDriftThresholdUSD)).
+		WithVelocityLimiter(velocityLimiter).
+		WithTenantLookup(tenantRepo)
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 
 	authHandler := auth.NewHandler(authSvc)

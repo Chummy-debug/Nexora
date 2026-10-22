@@ -36,6 +36,7 @@ type Engine struct {
 	assetIssuers   map[string]string
 	feeWallet      string
 	feePolicy      *FeePolicy
+	velocity       transfer.VelocityLimiter
 }
 
 func NewEngine(
@@ -49,14 +50,14 @@ func NewEngine(
 	feeWallet string,
 ) *Engine {
 	return &Engine{
-		txRepo:         txRepo,
-		walletRepo:     walletRepo,
-		feeSvc:         feeSvc,
-		stellar:        stellarClient,
-		signer:         signer,
-		network:        network,
-		assetIssuers:   assetIssuers,
-		feeWallet:      feeWallet,
+		txRepo:       txRepo,
+		walletRepo:   walletRepo,
+		feeSvc:       feeSvc,
+		stellar:      stellarClient,
+		signer:       signer,
+		network:      network,
+		assetIssuers: assetIssuers,
+		feeWallet:    feeWallet,
 	}
 }
 
@@ -73,6 +74,11 @@ func (e *Engine) WithSignerResolver(resolver stellar.SignerResolver) *Engine {
 // WithFeePolicy attaches a dynamic mempool congestion FeePolicy to the settlement engine.
 func (e *Engine) WithFeePolicy(policy *FeePolicy) *Engine {
 	e.feePolicy = policy
+	return e
+}
+
+func (e *Engine) WithVelocityLimiter(limiter transfer.VelocityLimiter) *Engine {
+	e.velocity = limiter
 	return e
 }
 
@@ -271,6 +277,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusFailed, txHash); err != nil {
 			log.Error().Err(err).Str("tx_id", txID).Msg("settlement: failed to update failed status")
 		}
+		e.rollbackVelocity(ctx, tx)
 		return fmt.Errorf("submit to stellar: %w", outcome.err)
 	}
 }
@@ -283,6 +290,7 @@ func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, 
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).Msg("failed to update confirmed status")
 	}
+	e.finalizeVelocity(ctx, tx)
 
 	// Update cached balances for source and destination wallets for the transferred asset
 	e.syncWalletBalances(ctx, srcWallet)
@@ -329,7 +337,26 @@ func (e *Engine) tryResolveAmbiguous(ctx context.Context, tx *domain.Transaction
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusFailed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Msg("settlement: failed to update failed status")
 	}
+	e.rollbackVelocity(ctx, tx)
 	return true
+}
+
+func (e *Engine) finalizeVelocity(ctx context.Context, tx *domain.Transaction) {
+	if e.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := e.velocity.Finalize(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement: failed to finalize velocity reservation")
+	}
+}
+
+func (e *Engine) rollbackVelocity(ctx context.Context, tx *domain.Transaction) {
+	if e.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := e.velocity.Rollback(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement: failed to roll back velocity reservation")
+	}
 }
 
 func (e *Engine) buildAsset(code string) (txnbuild.Asset, error) {

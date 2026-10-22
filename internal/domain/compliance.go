@@ -35,6 +35,9 @@ func (s ScreeningStatus) Severity() int {
 // importing internal/compliance.
 type ScreeningRequest struct {
 	OrgID         string
+	TransferID    string
+	AccountType   AccountType
+	RiskCategory  RiskCategory
 	FromWalletID  string
 	ToWalletID    string
 	FromPublicKey string
