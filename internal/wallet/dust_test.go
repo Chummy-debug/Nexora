@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/Lumen-Nexora/Nexora/internal/domain"
-	"github.com/Lumen-Nexora/Nexora/internal/fx"
 	"github.com/shopspring/decimal"
 	"github.com/stellar/go/keypair"
 	"github.com/stellar/go/protocols/horizon"
@@ -122,9 +121,9 @@ func (s *stubSigner) Sign(tx *txnbuild.Transaction, _ string) (*txnbuild.Transac
 
 type stubFX struct{ rates map[string]decimal.Decimal }
 
-func (f *stubFX) GetRates(_ context.Context, from, _ string) (*fx.RateResponse, error) {
+func (f *stubFX) GetRates(_ context.Context, from, _ string) (*domain.RateResponse, error) {
 	if rate, ok := f.rates[from]; ok {
-		return &fx.RateResponse{Rate: rate}, nil
+		return &domain.RateResponse{Rate: rate}, nil
 	}
 	return nil, errors.New("no rate")
 }

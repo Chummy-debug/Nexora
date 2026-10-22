@@ -287,7 +287,7 @@ func TestService_EvaluateWalletBalances(t *testing.T) {
 		ctx = context.WithValue(ctx, "tenant_id", uuid.NewString())
 		ctx = context.WithValue(ctx, "mode", domain.ModeLive)
 
-		alert, _ := svc.Create(ctx, "wallet-789", "EURC", "issuer-456", "100.00")
+		_, _ = svc.Create(ctx, "wallet-789", "EURC", "issuer-456", "100.00")
 
 		balances := map[string]decimal.Decimal{
 			"EURC": decimal.RequireFromString("50.00"),

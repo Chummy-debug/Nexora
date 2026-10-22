@@ -38,6 +38,27 @@ type Engine struct {
 	feeWallet       string
 	feePolicy       *FeePolicy
 	detailsRecorder SettlementDetailsRecorder
+	velocity        transfer.VelocityLimiter
+	balanceAlertSvc BalanceAlertService
+}
+
+// BalanceAlertService evaluates a wallet's balances against its alert rules
+// after settlement.
+type BalanceAlertService interface {
+	EvaluateWalletBalances(ctx context.Context, walletID string, balances map[string]decimal.Decimal) error
+}
+
+// WithVelocityLimiter finalizes or rolls back the transfer's rolling velocity
+// reservation when settlement succeeds or fails.
+func (e *Engine) WithVelocityLimiter(limiter transfer.VelocityLimiter) *Engine {
+	e.velocity = limiter
+	return e
+}
+
+// WithBalanceAlertService attaches a wallet balance alert service to the settlement engine.
+func (e *Engine) WithBalanceAlertService(svc BalanceAlertService) *Engine {
+	e.balanceAlertSvc = svc
+	return e
 }
 
 func NewEngine(

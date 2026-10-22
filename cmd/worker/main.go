@@ -16,6 +16,7 @@ import (
 	"github.com/Lumen-Nexora/Nexora/internal/claimable"
 	"github.com/Lumen-Nexora/Nexora/internal/compliance"
 	"github.com/Lumen-Nexora/Nexora/internal/config"
+	"github.com/Lumen-Nexora/Nexora/internal/crypto"
 	"github.com/Lumen-Nexora/Nexora/internal/fees"
 	"github.com/Lumen-Nexora/Nexora/internal/fx"
 	"github.com/Lumen-Nexora/Nexora/internal/indexer"
@@ -29,6 +30,7 @@ import (
 	"github.com/Lumen-Nexora/Nexora/internal/tracing"
 	"github.com/Lumen-Nexora/Nexora/internal/transfer"
 	"github.com/Lumen-Nexora/Nexora/internal/treasury"
+	"github.com/Lumen-Nexora/Nexora/internal/wallet"
 	"github.com/Lumen-Nexora/Nexora/internal/webhook"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -110,6 +112,14 @@ func main() {
 	stellarClient := stellar.NewClient(cfg.StellarLiveHorizonURL, cfg.StellarLiveNetwork, cfg.StellarHorizonTimeout)
 	testStellarClient := stellar.NewClient(cfg.StellarTestnetHorizonURL, cfg.StellarTestnetNetwork, cfg.StellarHorizonTimeout)
 	clientResolver := stellar.NewModeAwareClients(stellarClient, testStellarClient)
+	// Custodial seeds are sealed under KMS-wrapped data keys when a KMS is
+	// configured (#97). Signers open them only for the moment of signing, and
+	// seeds sealed before the KMS was enabled keep working via the master key.
+	if kms, err := crypto.ConfigureKMS(context.Background(), cfg.KMS()); err != nil {
+		log.Fatal().Err(err).Msg("configure KMS")
+	} else if kms != nil {
+		log.Info().Str("provider", kms.Name()).Dur("rotation_period", cfg.KMSRotationPeriod).Msg("custodial seed envelope encryption enabled")
+	}
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarLiveNetwork)
 	testSigner := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarTestnetNetwork)
 	signerResolver := stellar.NewModeAwareSigners(signer, testSigner)
@@ -280,6 +290,31 @@ func main() {
 		treasury.OptionsFromConfig(cfg.TreasuryBaseReserve, cfg.TreasuryReserveCacheTTLSec, cfg.TreasuryReserveConcurrency)...,
 	)
 	treasuryWorker := treasury.NewWorker(treasurySvc)
+	// Executes consolidations accepted by the API (#95).
+	consolidator := wallet.NewConsolidator(walletRepo, wallet.NewConsolidationRepository(repoDB), wallet.NewClosureRepository(repoDB),
+		stellarClient, signer, audit.NewService(postgres.NewAuditRepo(repoDB)), nil).
+		WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver)
+	// Custodial deposit sweep (#94): only built when thresholds are set, and
+	// even then it touches only tenants that opted in via custody settings.
+	var custodialSweepEnabled bool
+	if cfg.CustodialSweepThresholds != "" {
+		thresholds, err := wallet.ParseSweepThresholds(cfg.CustodialSweepThresholds)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse CUSTODIAL_SWEEP_THRESHOLDS")
+		}
+		baseReserve, err := decimal.NewFromString(cfg.TreasuryBaseReserve)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse TREASURY_BASE_RESERVE")
+		}
+		sweepEngine := wallet.NewSweepEngine(wallet.NewSweepRepository(repoDB), stellarClient, signer, webhookSvc, wallet.SweepConfig{
+			Thresholds:  thresholds,
+			BaseReserve: baseReserve,
+			Concurrency: cfg.CustodialSweepConcurrency,
+		}).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+		treasuryWorker.WithCustodialSweeper(sweepEngine)
+		custodialSweepEnabled = true
+	}
 
 	// Claimable balances need the same signer and Horizon client as settlement:
 	// creating one spends the org's funds and revoking one claims them back.
@@ -405,6 +440,8 @@ func main() {
 	mux.HandleFunc(queue.TypeTenantWebhookDeliver, webhookWorker.HandleDeliver)
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
+	mux.HandleFunc(queue.TypeCustodialSweep, treasuryWorker.HandleCustodialSweep)
+	mux.HandleFunc(queue.TypeConsolidateWallets, consolidator.HandleConsolidate)
 	mux.HandleFunc(queue.TypeExpireClaimableBalances, claimableWorker.HandleExpiry)
 	mux.HandleFunc(queue.TypeExpireRateLocks, rateLockExpirationWorker.HandleExpireLocks)
 	if complianceWorker != nil {
@@ -446,6 +483,15 @@ func main() {
 	treasurySweepTask := asynq.NewTask(queue.TypeTreasurySweep, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@daily", treasurySweepTask); err != nil {
 		log.Fatal().Err(err).Msg("register treasury sweep scheduler")
+	}
+
+	// The custodial sweep is unique per run window so a slow scan of many
+	// wallets is never overlapped by the next tick.
+	if custodialSweepEnabled {
+		custodialSweepTask := asynq.NewTask(queue.TypeCustodialSweep, nil, asynq.Queue("low"), asynq.Unique(30*time.Minute))
+		if _, err := scheduler.Register(cfg.CustodialSweepInterval, custodialSweepTask); err != nil {
+			log.Fatal().Err(err).Msg("register custodial sweep scheduler")
+		}
 	}
 
 	// The expiry tracker runs every 5 minutes so an unclaimed balance is marked

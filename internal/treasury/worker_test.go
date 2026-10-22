@@ -2,9 +2,11 @@ package treasury_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Lumen-Nexora/Nexora/internal/treasury"
+	"github.com/Lumen-Nexora/Nexora/internal/wallet"
 	"github.com/hibiken/asynq"
 	"github.com/shopspring/decimal"
 )
@@ -93,5 +95,44 @@ func TestHandleSweepSweepsAboveThresholdAndSkipsDisabled(t *testing.T) {
 	usdc, ok := byAsset["USDC"]
 	if !ok || !usdc.amount.IsZero() || usdc.triggeredBy != treasury.TriggeredByAuto {
 		t.Errorf("expected a zero-amount audit sweep for USDC, got: %+v", usdc)
+	}
+}
+
+type fakeSweeper struct {
+	calls  int
+	report wallet.SweepReport
+	err    error
+}
+
+func (f *fakeSweeper) SweepAll(context.Context) (wallet.SweepReport, error) {
+	f.calls++
+	return f.report, f.err
+}
+
+func TestHandleCustodialSweep_RunsTheSweeper(t *testing.T) {
+	sweeper := &fakeSweeper{report: wallet.SweepReport{Targets: 1, WalletsSwept: 3, Transactions: 1}}
+	w := treasury.NewWorker(&fakeService{}).WithCustodialSweeper(sweeper)
+
+	if err := w.HandleCustodialSweep(context.Background(), asynq.NewTask("wallet:custodial_sweep", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sweeper.calls != 1 {
+		t.Fatalf("sweeper called %d times, want 1", sweeper.calls)
+	}
+}
+
+func TestHandleCustodialSweep_ReturnsRunFailureForRetry(t *testing.T) {
+	sweeper := &fakeSweeper{err: errors.New("database unavailable")}
+	w := treasury.NewWorker(&fakeService{}).WithCustodialSweeper(sweeper)
+
+	if err := w.HandleCustodialSweep(context.Background(), asynq.NewTask("wallet:custodial_sweep", nil)); err == nil {
+		t.Fatal("expected the run failure to be returned so asynq retries")
+	}
+}
+
+func TestHandleCustodialSweep_NoSweeperIsANoop(t *testing.T) {
+	w := treasury.NewWorker(&fakeService{})
+	if err := w.HandleCustodialSweep(context.Background(), asynq.NewTask("wallet:custodial_sweep", nil)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

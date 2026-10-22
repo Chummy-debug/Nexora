@@ -727,6 +727,350 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/{id}/close:
+    post:
+      operationId: closeWallet
+      summary: Close a custodial wallet (destructive)
+      description: |
+        Permanently destroys a custodial Stellar account. In one atomic
+        transaction every asset trustline is removed (ChangeTrust limit 0) and
+        the account is merged (AccountMerge) into the tenant master address
+        configured under /v1/wallets/custody-settings, recovering all locked
+        native XLM reserves.
+
+        Refused (409) while any non-native trustline holds a balance or open
+        liabilities, while transfers into or out of the wallet are pending, or
+        when the wallet is the tenant's primary settlement account. The
+        authenticated operator and the justification are written to a
+        permanent compliance audit log before the transaction is submitted.
+        Owner or Admin role required. This cannot be undone.
+      tags:
+      - Wallets
+      parameters:
+      - $ref: '#/components/parameters/WalletID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseWalletRequest'
+            example:
+              justification: Customer offboarded; account inactive for 180 days
+              confirm: GBXCAFE7RJHBEVGT5ANBZ7YXDU7S3Y3VQWZ5J4YKJ2D6S7F8G9H0I
+      responses:
+        '200':
+          description: Account merged into the tenant master address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountClosure'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The account cannot be closed safely. code is one of
+            CLOSURE_OUTSTANDING_BALANCE, CLOSURE_PENDING_TRANSFERS,
+            CLOSURE_PROTECTED_ACCOUNT, CLOSURE_UNSUPPORTED_ACCOUNT or
+            CLOSURE_ALREADY_EXISTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: CLOSURE_OUTSTANDING_BALANCE
+                  message: wallet holds a non-zero balance or open liabilities on a non-native asset
+                  status: 409
+                  request_id: req-example
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '502':
+          description: The closure transaction was rejected by the network; the returned record is marked failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountClosure'
+  /v1/wallets/closures:
+    get:
+      operationId: listAccountClosures
+      summary: List account closures
+      description: Returns the tenant's account closure records, newest first. Owner or Admin role required.
+      tags:
+      - Wallets
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      responses:
+        '200':
+          description: Closure records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  closures:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AccountClosure'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/closures/{closureId}:
+    get:
+      operationId: getAccountClosure
+      summary: Get an account closure
+      description: Returns one closure record. Owner or Admin role required.
+      tags:
+      - Wallets
+      parameters:
+      - name: closureId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Closure record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountClosure'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/custody-settings:
+    get:
+      operationId: getCustodySettings
+      summary: Get custody settings
+      description: Returns the master address and primary settlement wallet for the request's live/test mode. Owner or Admin role required.
+      tags:
+      - Wallets
+      responses:
+        '200':
+          description: Custody settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustodySettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    put:
+      operationId: putCustodySettings
+      summary: Set custody settings
+      description: |
+        Sets the tenant master address that receives the reserves of closed
+        wallets and, when auto_sweep_enabled is set, swept customer deposits;
+        and the primary settlement wallet, which is never closed or swept.
+        Applies to the request's live/test mode. Owner or Admin role required.
+      tags:
+      - Wallets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustodySettingsRequest'
+            example:
+              master_address: GA5ZSEJ6BHT2ZKGDABICHI62W25ZJUXUNFFYGLYTIEXP6CZMUWqmOvxM
+              primary_settlement_wallet_id: 3f1c2b7e-8d4a-4f0e-9a51-6c2d8e7b1a90
+              auto_sweep_enabled: true
+      responses:
+        '200':
+          description: Settings stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustodySettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/consolidations:
+    post:
+      operationId: createWalletConsolidation
+      summary: Consolidate balances from many wallets
+      description: |
+        Moves the balances of up to 500 of the tenant's custodial wallets into
+        one of its wallets. Every source and the destination must belong to
+        the calling tenant.
+
+        With dry_run, returns the exact plan (batches, fees, recovered
+        reserves and the destination's resulting balances) without submitting
+        or recording anything. Otherwise the request is priced, recorded under
+        idempotency_key and executed in the background in sequential batches
+        of batch_size (10-20) wallets per Stellar transaction, fewer when a
+        batch would exceed 100 operations. Poll the returned operation.
+
+        Retrying with the same idempotency_key and body returns the original
+        operation (200) and never moves funds twice; the same key with a
+        different body is refused (409).
+
+        merge_sources closes each source: balances are paid out, trustlines
+        removed and the account merged into the destination, recovering its
+        reserves. Owner or Admin role required.
+      tags:
+      - Wallets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsolidationRequest'
+            example:
+              source_wallet_ids:
+              - 3f1c2b7e-8d4a-4f0e-9a51-6c2d8e7b1a90
+              - 9b2d4f6a-1c3e-4a5b-8d7f-0e1a2b3c4d5e
+              destination_wallet_id: 7c1e9a4e-2b3d-4c5e-9f60-1a2b3c4d5e6f
+              idempotency_key: consolidate-2026-10-22
+              batch_size: 20
+              merge_sources: false
+              dry_run: true
+      responses:
+        '200':
+          description: Dry-run preview, or the original operation for a replayed idempotency_key
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/ConsolidationPreview'
+                - $ref: '#/components/schemas/ConsolidationOperation'
+        '202':
+          description: Consolidation accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsolidationOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The idempotency_key was used for a different request (CONFLICT),
+            no source has anything to move (CONSOLIDATION_NOTHING_TO_MOVE), or
+            the destination is not on the ledger
+            (CONSOLIDATION_DESTINATION_UNFUNDED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: CONSOLIDATION_NOTHING_TO_MOVE
+                  message: no source wallet has a balance that can be consolidated
+                  status: 409
+                  request_id: req-example
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      operationId: listWalletConsolidations
+      summary: List consolidations
+      description: Returns the tenant's consolidations, newest first. Owner or Admin role required.
+      tags:
+      - Wallets
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      responses:
+        '200':
+          description: Consolidations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  consolidations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConsolidationOperation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/consolidations/{consolidationId}:
+    get:
+      operationId: getWalletConsolidation
+      summary: Get a consolidation
+      description: Returns one consolidation with its per-batch results. Owner or Admin role required.
+      tags:
+      - Wallets
+      parameters:
+      - name: consolidationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Consolidation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsolidationOperation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/wallets/{id}/deposit/fiat:
     post:
       operationId: depositFiat
@@ -3226,6 +3570,13 @@ components:
               - REVIEW_ALREADY_DECIDED
               - CLAIMABLE_BALANCE_NOT_PENDING
               - REQUEST_IN_PROGRESS
+              - CLOSURE_OUTSTANDING_BALANCE
+              - CLOSURE_PENDING_TRANSFERS
+              - CLOSURE_PROTECTED_ACCOUNT
+              - CLOSURE_UNSUPPORTED_ACCOUNT
+              - CLOSURE_ALREADY_EXISTS
+              - CONSOLIDATION_NOTHING_TO_MOVE
+              - CONSOLIDATION_DESTINATION_UNFUNDED
               description: Machine-readable error code
             message:
               type: string
@@ -3242,6 +3593,306 @@ components:
               type: object
               additionalProperties: true
               description: For SLIPPAGE_EXCEEDED, contains trade_size, top_price, effective_price, price_impact_pct, price_impact_bps, tolerance_pct, tolerance_bps, tier, and allowed. Decimal values are strings.
+    CloseWalletRequest:
+      type: object
+      required:
+      - justification
+      - confirm
+      properties:
+        justification:
+          type: string
+          minLength: 10
+          description: Why the account is being destroyed; stored in the permanent audit log
+        confirm:
+          type: string
+          description: Must equal the wallet's public key
+    AccountClosure:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        mode:
+          type: string
+          enum:
+          - live
+          - test
+        wallet_id:
+          type: string
+        destination_wallet:
+          type: string
+          nullable: true
+        destination_address:
+          type: string
+          description: Tenant master address that received the merged XLM
+        actor_type:
+          type: string
+        actor_id:
+          type: string
+          description: Authenticated operator that performed the closure
+        justification:
+          type: string
+        removed_trustlines:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_code:
+                type: string
+              issuer:
+                type: string
+        native_balance:
+          type: string
+          description: Native XLM balance merged into the master address, before fees
+        transaction_hash:
+          type: string
+        status:
+          type: string
+          enum:
+          - pending
+          - completed
+          - failed
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    CustodySettingsRequest:
+      type: object
+      required:
+      - master_address
+      properties:
+        master_address:
+          type: string
+          description: Stellar account ID (G...) that receives closed wallets' reserves
+        primary_settlement_wallet_id:
+          type: string
+          nullable: true
+        auto_sweep_enabled:
+          type: boolean
+          default: false
+          description: |
+            Opt in to the automated deposit sweep, which moves balances above
+            the operator-configured thresholds from the tenant's custodial
+            wallets into master_address, leaving each wallet its minimum
+            reserve. Emits wallet.swept per swept wallet.
+    CustodySettings:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        mode:
+          type: string
+        master_address:
+          type: string
+        primary_settlement_wallet_id:
+          type: string
+          nullable: true
+        auto_sweep_enabled:
+          type: boolean
+        updated_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ConsolidationRequest:
+      type: object
+      required:
+      - source_wallet_ids
+      - destination_wallet_id
+      properties:
+        source_wallet_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+        destination_wallet_id:
+          type: string
+        idempotency_key:
+          type: string
+          maxLength: 255
+          description: Required unless dry_run is true
+        merge_sources:
+          type: boolean
+          default: false
+        batch_size:
+          type: integer
+          minimum: 10
+          maximum: 20
+          default: 20
+        dry_run:
+          type: boolean
+          default: false
+    ConsolidationBatch:
+      type: object
+      properties:
+        index:
+          type: integer
+        wallet_ids:
+          type: array
+          items:
+            type: string
+        operations:
+          type: integer
+        fee_stroops:
+          type: integer
+          format: int64
+        fee_payer_wallet_id:
+          type: string
+        transaction_hash:
+          type: string
+        status:
+          type: string
+          enum:
+          - completed
+          - failed
+        error:
+          type: string
+    ConsolidationWalletPlan:
+      type: object
+      properties:
+        wallet_id:
+          type: string
+        public_key:
+          type: string
+        moves:
+          type: array
+          items:
+            $ref: '#/components/schemas/SweepItem'
+        merged:
+          type: boolean
+        skip_reason:
+          type: string
+          enum:
+          - pending_transfers
+          - unfunded
+          - load_failed
+          - nothing_to_move
+          - protected_account
+          - destination_missing_trustline
+          - unsupported_account
+          - fee_unpayable
+    SweepItem:
+      type: object
+      properties:
+        wallet_id:
+          type: string
+        public_key:
+          type: string
+        asset_code:
+          type: string
+        issuer:
+          type: string
+        amount:
+          type: string
+        balance_before:
+          type: string
+        retained:
+          type: string
+    ConsolidationPreview:
+      type: object
+      properties:
+        destination_wallet:
+          type: string
+        merge_sources:
+          type: boolean
+        batch_size:
+          type: integer
+        batches:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolidationBatch'
+        wallets:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolidationWalletPlan'
+        total_fee:
+          type: string
+        total_fee_stroops:
+          type: integer
+          format: int64
+        reserve_recovered:
+          type: string
+        net_xlm:
+          type: string
+          description: reserve_recovered minus total_fee; negative means a net cost
+        resulting_balances:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_code:
+                type: string
+              issuer:
+                type: string
+              before:
+                type: string
+              after:
+                type: string
+    ConsolidationOperation:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        mode:
+          type: string
+        source_wallet_ids:
+          type: array
+          items:
+            type: string
+        destination_wallet:
+          type: string
+        idempotency_key:
+          type: string
+        merge_sources:
+          type: boolean
+        batch_size:
+          type: integer
+        total_fee:
+          type: string
+        reserve_recovered:
+          type: string
+        status:
+          type: string
+          enum:
+          - pending
+          - processing
+          - completed
+          - partially_completed
+          - failed
+        dry_run:
+          type: boolean
+        transaction_hashes:
+          type: array
+          items:
+            type: string
+        batches:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConsolidationBatch'
+        actor_type:
+          type: string
+        actor_id:
+          type: string
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
     HealthResponse:
       type: object
       properties:
@@ -4203,6 +4854,7 @@ components:
             - transfer.settled
             - transfer.failed
             - wallet.funded
+            - wallet.swept
             - conversion.completed
           description: 'Event types to subscribe to. Omit or pass an empty array to
 
@@ -4262,6 +4914,7 @@ components:
           - transfer.settled
           - transfer.failed
           - wallet.funded
+          - wallet.swept
           - conversion.completed
         status:
           type: string
