@@ -36,6 +36,11 @@ type Engine struct {
 	assetIssuers   map[string]string
 	feeWallet      string
 	feePolicy      *FeePolicy
+	balanceAlertSvc BalanceAlertService
+}
+
+type BalanceAlertService interface {
+	EvaluateWalletBalances(ctx context.Context, walletID string, balances map[string]decimal.Decimal) error
 }
 
 func NewEngine(
@@ -73,6 +78,12 @@ func (e *Engine) WithSignerResolver(resolver stellar.SignerResolver) *Engine {
 // WithFeePolicy attaches a dynamic mempool congestion FeePolicy to the settlement engine.
 func (e *Engine) WithFeePolicy(policy *FeePolicy) *Engine {
 	e.feePolicy = policy
+	return e
+}
+
+// WithBalanceAlertService attaches a wallet balance alert service to the settlement engine.
+func (e *Engine) WithBalanceAlertService(svc BalanceAlertService) *Engine {
+	e.balanceAlertSvc = svc
 	return e
 }
 
@@ -285,8 +296,22 @@ func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, 
 	}
 
 	// Update cached balances for source and destination wallets for the transferred asset
-	e.syncWalletBalances(ctx, srcWallet)
-	e.syncWalletBalances(ctx, dstWallet)
+	srcBalances := e.syncWalletBalances(ctx, srcWallet)
+	dstBalances := e.syncWalletBalances(ctx, dstWallet)
+
+	// Evaluate balance alerts for source wallet
+	if e.balanceAlertSvc != nil && srcWallet != nil && len(srcBalances) > 0 {
+		if err := e.balanceAlertSvc.EvaluateWalletBalances(ctx, srcWallet.ID, srcBalances); err != nil {
+			log.Error().Err(err).Str("wallet_id", srcWallet.ID).Msg("failed to evaluate balance alerts for source wallet")
+		}
+	}
+
+	// Evaluate balance alerts for destination wallet
+	if e.balanceAlertSvc != nil && dstWallet != nil && len(dstBalances) > 0 {
+		if err := e.balanceAlertSvc.EvaluateWalletBalances(ctx, dstWallet.ID, dstBalances); err != nil {
+			log.Error().Err(err).Str("wallet_id", dstWallet.ID).Msg("failed to evaluate balance alerts for destination wallet")
+		}
+	}
 
 	if tx.Fee.GreaterThan(decimal.Zero) {
 		collection := &domain.FeeCollection{
@@ -401,9 +426,10 @@ func (e *Engine) submitWithRetry(ctx context.Context, tx *txnbuild.Transaction) 
 	return submitOutcome{class: stellar.SubmitDefinite, err: lastErr}
 }
 
-func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
+func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) map[string]decimal.Decimal {
+	balances := make(map[string]decimal.Decimal)
 	if w == nil {
-		return
+		return balances
 	}
 	if acct, err := stellar.LoadAccountWithContext(ctx, e.client(ctx), w.PublicKey); err == nil {
 		for _, b := range acct.Balances {
@@ -414,7 +440,9 @@ func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
 			amt, err := decimal.NewFromString(b.Balance)
 			if err == nil {
 				_ = e.walletRepo.UpsertBalance(ctx, w.ID, code, b.Issuer, amt)
+				balances[code] = amt
 			}
 		}
 	}
+	return balances
 }
