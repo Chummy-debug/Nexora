@@ -13,6 +13,7 @@ import (
 
 type Handler struct {
 	svc          Service
+	simulation   SimulationService
 	contractSvc  ContractService
 	idem         func(http.Handler) http.Handler
 	guardianGate func(http.Handler) http.Handler
@@ -47,6 +48,31 @@ func (h *Handler) WithGuardianGate(mw func(http.Handler) http.Handler) *Handler 
 	return h
 }
 
+func (h *Handler) WithSimulation(simulation SimulationService) *Handler {
+	h.simulation = simulation
+	return h
+}
+
+func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {
+	var req SimulationRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		api.BadRequest(w, "invalid simulation request")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		api.BadRequest(w, "expected one request object")
+		return
+	}
+	result, err := h.simulation.Simulate(r.Context(), chi.URLParam(r, "id"), req)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
@@ -58,6 +84,9 @@ func (h *Handler) Routes() func(r chi.Router) {
 		r.Get("/{id}", h.getWallet)
 		r.Get("/{id}/balances", h.getBalances)
 		post("/{id}/trustlines", h.addTrustline)
+		if h.simulation != nil {
+			r.Post("/{id}/simulate", h.simulate)
+		}
 
 		if h.contractSvc != nil {
 			r.Get("/{id}/contract-state", h.getContractState)

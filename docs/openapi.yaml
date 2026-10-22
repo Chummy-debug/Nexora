@@ -609,6 +609,87 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/{id}/simulate:
+    post:
+      operationId: simulateWalletPayment
+      summary: Predict a custodial classic payment before signing
+      description: >-
+        Read-only local validation using Horizon account, latest ledger and fee
+        statistics reads. Horizon has no classic-payment dry-run endpoint.
+        Never signs or broadcasts. Supports one native or explicitly issued
+        credit-asset payment, not contract invocations or arbitrary operations.
+        Checks reserve sponsorship, selling/buying liabilities, trustline
+        authorization/capacity and optional sequence. Redis snapshots expire
+        after two seconds and are isolated by network. Warm-cache latency targets
+        100ms; upstream misses are bounded by the configured Horizon timeout.
+        Success is a prediction, not network execution or signature validation.
+        Reload balances and sequence before signing; concurrent transactions and
+        changing fees can invalidate it. No sequence reservation is made.
+      tags: [Wallets]
+      parameters:
+      - $ref: '#/components/parameters/WalletID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [destination, amount]
+              properties:
+                destination:
+                  type: string
+                  description: Existing Stellar G-address
+                asset:
+                  type: string
+                  default: XLM
+                issuer:
+                  type: string
+                  description: Required for credit assets; omitted for XLM
+                amount:
+                  type: string
+                  description: Positive amount with at most seven fractional digits
+                sequence:
+                  type: string
+                  description: Optional proposed transaction sequence; must equal source sequence plus one
+      responses:
+        '200':
+          description: Prediction (including unsuccessful validation)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, code, estimated_fee_stroops, sequence, ledger, cached, state_cache_ttl_ms, warning]
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: string
+                    description: ok or a failed reserve, balance, account, sequence or trustline check
+                  estimated_fee_stroops:
+                    type: string
+                    description: One-operation fee estimate; maximum of ledger base fee and p95 charged fee
+                  sequence:
+                    type: string
+                    description: Next sequence, empty when source account is missing
+                  ledger:
+                    type: integer
+                  cached:
+                    type: boolean
+                    description: All network/source/destination snapshots were cache hits
+                  state_cache_ttl_ms:
+                    type: integer
+                    description: Configured cache TTL, not a guarantee of ledger freshness
+                  warning:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/wallets/{id}/trustlines:
     post:
       operationId: createTrustline
@@ -1157,7 +1238,7 @@ paths:
     post:
       operationId: executeConversion
       summary: Execute a conversion
-      description: Executes a previously quoted FX conversion. The quote must not be expired or already used.
+      description: Executes a previously quoted FX conversion. The quote must not be expired or already used. Current executable orderbook depth is checked before consuming the quote or rate lock. Excess impact returns SLIPPAGE_EXCEEDED with the calculation in error.details; insufficient liquidity returns INSUFFICIENT_LIQUIDITY.
       tags:
       - FX
       requestBody:
@@ -1193,7 +1274,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: Quote expired or already used
+          description: Quote expired, already used, or insufficient executable liquidity
           content:
             application/json:
               schema:
@@ -1204,6 +1285,12 @@ paths:
                   message: quote expired
                   status: 422
                   request_id: req-example
+        '503':
+          description: Current orderbook depth unavailable; conversion was not executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /v1/fx/rates:
@@ -2352,6 +2439,56 @@ paths:
         '409': {$ref: '#/components/responses/Conflict'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '500': {$ref: '#/components/responses/InternalServerError'}
+  /v1/admin/reconciliation/three-way:
+    post:
+      operationId: generateThreeWayReconciliation
+      summary: Reconcile a daily bank report with internal transfers and Horizon
+      description: |
+        Owner/admin only. Upload a normalized provider CSV with columns
+        reference,amount,currency,status,settled_at. Amounts are positive decimal
+        strings (up to 20 integer and 7 fractional digits), currencies are three
+        uppercase letters, status is settled/pending/failed, and settled_at is
+        RFC3339 within the requested UTC day. Maximum 4 MiB and 10000 rows.
+        Returns an XLSX workbook with Summary, All transfers, and Exceptions.
+        Reads the authenticated tenant and mode from the primary database and
+        selects that mode's Horizon client. Compares the day's created fiat
+        transfers plus older transfers referenced in the report. This is not a
+        scan of all Stellar activity; missing internal references have unknown
+        chain status. Horizon evidence is current at run time, not historical
+        as-of-day evidence. Provider-specific reports must first be normalized;
+        callers can schedule this endpoint after receiving a complete daily report.
+        No balances/statuses are changed. Network errors abort without a workbook.
+        Workbook references/amounts are text cells, never executable formulas.
+      tags: [Admin]
+      security:
+      - AdminAuth: []
+      parameters:
+      - name: date
+        in: query
+        required: true
+        schema: {type: string, format: date}
+      - name: provider
+        in: query
+        required: true
+        schema: {type: string, minLength: 1, maxLength: 64}
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: {type: string}
+            example: "reference,amount,currency,status,settled_at\nbank-123,100.01,NGN,settled,2026-10-22T10:00:00Z\n"
+      responses:
+        '200':
+          description: Audit workbook; exceptions include resolution recommendations
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: {type: string, format: binary}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+        '503':
+          description: Reconciliation service is not configured
   /v1/admin/reconciliation/summary:
     get:
       operationId: getReconciliationSummary
@@ -3083,6 +3220,9 @@ components:
               - INSUFFICIENT_SWEEPABLE_BALANCE
               - QUOTE_EXPIRED
               - QUOTE_ALREADY_USED
+              - SLIPPAGE_EXCEEDED
+              - INSUFFICIENT_LIQUIDITY
+              - DEPTH_UNAVAILABLE
               - REVIEW_ALREADY_DECIDED
               - CLAIMABLE_BALANCE_NOT_PENDING
               - REQUEST_IN_PROGRESS
@@ -3098,6 +3238,10 @@ components:
             request_id:
               type: string
               description: Effective X-Request-ID response header value
+            details:
+              type: object
+              additionalProperties: true
+              description: For SLIPPAGE_EXCEEDED, contains trade_size, top_price, effective_price, price_impact_pct, price_impact_bps, tolerance_pct, tolerance_bps, tier, and allowed. Decimal values are strings.
     HealthResponse:
       type: object
       properties:
@@ -3783,7 +3927,9 @@ components:
           description: Optional minimum acceptable output amount
         max_slippage_bps:
           type: integer
-          description: Optional maximum acceptable slippage in basis points
+          minimum: 5
+          maximum: 500
+          description: Maximum acceptable price impact in basis points (5 = 0.05%, 500 = 5%). Defaults to 50 for trades up to 10,000 source units, 100 up to 100,000, and 200 above that.
     ConversionResponse:
       type: object
       properties:

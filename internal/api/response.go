@@ -16,10 +16,11 @@ type errorResponse struct {
 }
 
 type errorDetail struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Status    int    `json:"status"`
-	RequestID string `json:"request_id"`
+	Code      string      `json:"code"`
+	Message   string      `json:"message"`
+	Status    int         `json:"status"`
+	RequestID string      `json:"request_id"`
+	Details   interface{} `json:"details,omitempty"`
 }
 
 // ValidationErrorDetail describes a single invalid field in a request.
@@ -60,6 +61,11 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 	JSON(w, status, errorResponse{
 		Error: errorDetail{Code: code, Message: message, Status: status, RequestID: effectiveRequestID(w)},
 	})
+}
+
+// ErrorWithDetails preserves the standard error envelope and attaches calculation data.
+func ErrorWithDetails(w http.ResponseWriter, status int, code, message string, details interface{}) {
+	JSON(w, status, errorResponse{Error: errorDetail{Code: code, Message: message, Status: status, RequestID: effectiveRequestID(w), Details: details}})
 }
 
 // WriteError writes an error response using HandleDomainError for domain errors

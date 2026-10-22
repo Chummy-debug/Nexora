@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 	stellarnet "github.com/stellar/go/network"
+	"github.com/stellar/go/protocols/horizon"
 	"github.com/stellar/go/txnbuild"
 )
 
@@ -29,14 +30,14 @@ type Engine struct {
 	// clientResolver and signerResolver select the live or testnet client for
 	// the request's environment. They are nil for single-environment callers,
 	// in which case stellar/signer are used directly.
-	clientResolver stellar.ClientResolver
-	signer         stellar.Signer
-	signerResolver stellar.SignerResolver
-	network        string
-	assetIssuers   map[string]string
-	feeWallet      string
-	feePolicy      *FeePolicy
-	velocity       transfer.VelocityLimiter
+	clientResolver  stellar.ClientResolver
+	signer          stellar.Signer
+	signerResolver  stellar.SignerResolver
+	network         string
+	assetIssuers    map[string]string
+	feeWallet       string
+	feePolicy       *FeePolicy
+	detailsRecorder SettlementDetailsRecorder
 }
 
 func NewEngine(
@@ -77,8 +78,10 @@ func (e *Engine) WithFeePolicy(policy *FeePolicy) *Engine {
 	return e
 }
 
-func (e *Engine) WithVelocityLimiter(limiter transfer.VelocityLimiter) *Engine {
-	e.velocity = limiter
+// WithSettlementDetailsRecorder attaches the recorder that captures the exact
+// Horizon fee_charged and ledger close time for network-fee accounting.
+func (e *Engine) WithSettlementDetailsRecorder(recorder SettlementDetailsRecorder) *Engine {
+	e.detailsRecorder = recorder
 	return e
 }
 
@@ -255,7 +258,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 
 	switch {
 	case outcome.confirmed:
-		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet)
+		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet, &outcome.result)
 		return nil
 
 	case outcome.class != stellar.SubmitDefinite:
@@ -286,15 +289,29 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 // balances, and records any platform fee collected. Shared by the direct
 // submission-success path and by tryResolveAmbiguous once a hash lookup
 // confirms an initially-ambiguous submission did land on-chain.
-func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, txID, txHash string, srcWallet, dstWallet *domain.Wallet) {
+func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, txID, txHash string, srcWallet, dstWallet *domain.Wallet, horizonTx *horizon.Transaction) {
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).Msg("failed to update confirmed status")
 	}
 	e.finalizeVelocity(ctx, tx)
 
 	// Update cached balances for source and destination wallets for the transferred asset
-	e.syncWalletBalances(ctx, srcWallet)
-	e.syncWalletBalances(ctx, dstWallet)
+	srcBalances := e.syncWalletBalances(ctx, srcWallet)
+	dstBalances := e.syncWalletBalances(ctx, dstWallet)
+
+	// Evaluate balance alerts for source wallet
+	if e.balanceAlertSvc != nil && srcWallet != nil && len(srcBalances) > 0 {
+		if err := e.balanceAlertSvc.EvaluateWalletBalances(ctx, srcWallet.ID, srcBalances); err != nil {
+			log.Error().Err(err).Str("wallet_id", srcWallet.ID).Msg("failed to evaluate balance alerts for source wallet")
+		}
+	}
+
+	// Evaluate balance alerts for destination wallet
+	if e.balanceAlertSvc != nil && dstWallet != nil && len(dstBalances) > 0 {
+		if err := e.balanceAlertSvc.EvaluateWalletBalances(ctx, dstWallet.ID, dstBalances); err != nil {
+			log.Error().Err(err).Str("wallet_id", dstWallet.ID).Msg("failed to evaluate balance alerts for destination wallet")
+		}
+	}
 
 	if tx.Fee.GreaterThan(decimal.Zero) {
 		collection := &domain.FeeCollection{
@@ -308,6 +325,15 @@ func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, 
 		}
 		if err := e.feeSvc.RecordCollection(ctx, collection); err != nil {
 			log.Error().Err(err).Str("tx_id", txID).Msg("failed to record fee collection")
+		}
+	}
+
+	if e.detailsRecorder != nil && horizonTx != nil {
+		if err := e.detailsRecorder.RecordSettlementDetails(
+			ctx, txID, txHash, tx.TenantID, horizonTx.Ledger, horizonTx.FeeCharged, horizonTx.LedgerCloseTime,
+		); err != nil {
+			log.Warn().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).
+				Msg("failed to record network fee accounting")
 		}
 	}
 }
@@ -328,7 +354,7 @@ func (e *Engine) tryResolveAmbiguous(ctx context.Context, tx *domain.Transaction
 	if horizonTx.Successful {
 		log.Info().Str("tx_id", txID).Str("tx_hash", txHash).
 			Msg("settlement: resolved ambiguous submission as confirmed via Horizon")
-		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet)
+		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet, &horizonTx)
 		return true
 	}
 
@@ -390,6 +416,7 @@ type submitOutcome struct {
 	confirmed bool
 	class     stellar.SubmitClass
 	err       error
+	result    horizon.Transaction
 }
 
 // submitWithRetry resubmits the same signed transaction envelope on
@@ -413,7 +440,7 @@ func (e *Engine) submitWithRetry(ctx context.Context, tx *txnbuild.Transaction) 
 
 		resp, err := stellar.SubmitTransactionWithContext(ctx, e.client(ctx), tx)
 		if err == nil {
-			return submitOutcome{hash: resp.Hash, confirmed: true}
+			return submitOutcome{hash: resp.Hash, confirmed: true, result: resp}
 		}
 
 		lastErr = err
@@ -428,9 +455,10 @@ func (e *Engine) submitWithRetry(ctx context.Context, tx *txnbuild.Transaction) 
 	return submitOutcome{class: stellar.SubmitDefinite, err: lastErr}
 }
 
-func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
+func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) map[string]decimal.Decimal {
+	balances := make(map[string]decimal.Decimal)
 	if w == nil {
-		return
+		return balances
 	}
 	if acct, err := stellar.LoadAccountWithContext(ctx, e.client(ctx), w.PublicKey); err == nil {
 		for _, b := range acct.Balances {
@@ -441,7 +469,9 @@ func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
 			amt, err := decimal.NewFromString(b.Balance)
 			if err == nil {
 				_ = e.walletRepo.UpsertBalance(ctx, w.ID, code, b.Issuer, amt)
+				balances[code] = amt
 			}
 		}
 	}
+	return balances
 }
