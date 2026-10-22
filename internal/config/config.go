@@ -49,6 +49,7 @@ type Config struct {
 	TreasuryBaseReserve             string
 	TreasuryReserveCacheTTLSec      int
 	TreasuryReserveConcurrency      int
+	AuditChainVerifyIntervalSec     int
 	FlutterwaveSecretKey            string
 	FlutterwaveWebhookHash          string
 	BalanceDiscrepancyThreshold     string

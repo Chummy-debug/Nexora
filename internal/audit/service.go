@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,15 +25,29 @@ type Service interface {
 	Proof(ctx context.Context, txID string) (*SettlementProof, error)
 }
 
+// eventStore is the narrow read/write surface the audit service needs from
+// storage. Declared locally so the audit package never imports the postgres
+// package (whose repositories import services, closing an import cycle).
+// *postgres.AuditRepo satisfies it structurally.
+type eventStore interface {
+	Create(ctx context.Context, event *domain.AuditEvent) error
+	List(ctx context.Context, tenantID string, mode domain.Mode, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
+}
+
 type service struct {
-	repo       *postgres.AuditRepo
+	repo eventStore
+	// tamper chains every append onto the SHA-256 row-hash chain. nil keeps
+	// the plain append-only write (used when tamper-proofing is not wired).
+	tamper      TamperProofStore
 	proofSource settlementProofSource
 }
 
-func NewService(repo *postgres.AuditRepo, txRepos ...*postgres.TransactionRepo) Service {
+// NewService builds the audit service. The optional proof source (a
+// *postgres.TransactionRepo) enables settlement Merkle proofs.
+func NewService(repo eventStore, proofSources ...settlementProofSource) Service {
 	var source settlementProofSource
-	if len(txRepos) > 0 && txRepos[0] != nil {
-		source = txRepos[0]
+	if len(proofSources) > 0 {
+		source = proofSources[0]
 	}
 	return &service{repo: repo, proofSource: source}
 }

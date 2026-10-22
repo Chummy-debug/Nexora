@@ -393,7 +393,6 @@ func main() {
 			WithGuardianGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	}
 	auditRepo := postgres.NewAuditRepo(repoDB)
-	txRepo := postgres.NewTransactionRepo(repoDB)
 	auditSvc := audit.NewService(auditRepo, txRepo)
 	reconcileHandler = reconcileHandler.WithAuditLogger(auditSvc)
 	auditHandler := audit.NewHandler(auditSvc)

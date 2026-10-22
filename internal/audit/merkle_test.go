@@ -15,7 +15,7 @@ func TestFilterSettledTransactionsUsesUTCWindow(t *testing.T) {
 		{ID: "inside-1", Status: domain.StatusSettled, CreatedAt: time.Date(2026, 10, 22, 00, 00, 00, 0, time.UTC)},
 		{ID: "inside-2", Status: domain.StatusSettled, CreatedAt: time.Date(2026, 10, 22, 12, 30, 0, 0, time.UTC)},
 		{ID: "after", Status: domain.StatusSettled, CreatedAt: time.Date(2026, 10, 23, 00, 00, 00, 0, time.UTC)},
-		{ID: "pending", Status: domain.StatusPending, CreatedAt: time.Date(2026, 10, 22, 08, 0, 0, 0, time.UTC)},
+		{ID: "pending", Status: domain.StatusPending, CreatedAt: time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)},
 	}
 
 	got := FilterSettledTransactions(txs, day)
