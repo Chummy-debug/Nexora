@@ -3,6 +3,7 @@ module github.com/Lumen-Nexora/Nexora
 go 1.24.0
 
 require (
+	github.com/charltoncr/metaphone v0.0.0-20240616194957-50971979d019
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/go-playground/validator/v10 v10.22.0
 	github.com/golang-migrate/migrate/v4 v4.17.1

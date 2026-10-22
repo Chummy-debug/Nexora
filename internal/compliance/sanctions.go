@@ -35,6 +35,7 @@ type SanctionsSet struct {
 	mu          sync.RWMutex
 	byAddress   map[string]string
 	names       []nameEntry
+	fuzzy       *FuzzySanctionsIndex
 	entityCount int
 	updatedAt   time.Time
 	loaded      bool
@@ -76,10 +77,13 @@ func (s *SanctionsSet) Replace(entities []*domain.SanctionsEntity, updatedAt tim
 		}
 	}
 
+	// Build a separate immutable fuzzy index before publishing a refreshed set.
+	fuzzy := NewFuzzySanctionsIndex(entities)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byAddress = byAddress
 	s.names = names
+	s.fuzzy = fuzzy
 	s.entityCount = len(entities)
 	s.updatedAt = updatedAt
 	s.loaded = true
@@ -134,6 +138,15 @@ func (s *SanctionsSet) MatchName(name string, threshold int) (string, int, bool)
 		return "", 0, false
 	}
 	return bestName, best, true
+}
+
+// MatchDetailedName uses the immutable indexed scorer and returns the
+// original sanction-list ID and source for auditability.
+func (s *SanctionsSet) MatchDetailedName(name string, threshold float64) (FuzzySanctionsMatch, bool) {
+	s.mu.RLock()
+	index := s.fuzzy
+	s.mu.RUnlock()
+	return index.Match(name, threshold)
 }
 
 // LoadFromRepository rebuilds the set from the sanctions_entities table. Every
@@ -207,8 +220,31 @@ func (s *SanctionsScreener) Screen(_ context.Context, req domain.ScreeningReques
 		}, nil
 	}
 
-	// A near-match on a name is evidence, not proof: names are not unique and
-	// transliteration varies. These hold for human review instead.
+	// Indexed Jaro-Winkler + Double Metaphone handles primary names, aliases,
+	// corporate entities and both sides of a transfer. A name can only hold
+	// for human review; never block automatically based on name similarity.
+	for _, value := range []string{req.ToFederation, req.ToName, req.FromName} {
+		if match, ok := s.set.MatchDetailedName(value, DefaultSimilarityThreshold); ok {
+			rule := "sanctions_name_fuzzy_match"
+			if normalizeName(value) == normalizeName(match.EntityName) {
+				rule = "sanctions_name_match"
+			}
+			return domain.ScreeningDecision{
+				Status:          domain.ScreeningHold,
+				RulesFired:      []string{rule},
+				Reason:          "name has a possible sanctions-list match; manual review required",
+				MatchedEntity:   match.EntityName,
+				MatchedEntityID: match.EntityID,
+				MatchedSource:   match.Source,
+				MatchScore:      match.Score,
+				RiskScore:       int(match.Score * 80),
+			}, nil
+		}
+	}
+
+	// Preserve the existing edit-distance fallback for older callers. This
+	// also maintains historic conservative hold semantics for near-misses
+	// not covered by any phonetic posting or prefix bucket.
 	if entity, dist, ok := s.set.MatchName(req.ToFederation, s.fuzzyThreshold); ok {
 		rule := "sanctions_name_match"
 		if dist > 0 {
@@ -217,7 +253,7 @@ func (s *SanctionsScreener) Screen(_ context.Context, req domain.ScreeningReques
 		return domain.ScreeningDecision{
 			Status:        domain.ScreeningHold,
 			RulesFired:    []string{rule},
-			Reason:        "destination name closely matches an OFAC SDN entry",
+			Reason:        "destination name closely matches a sanctions-list entry",
 			MatchedEntity: entity,
 			RiskScore:     80 - dist*10,
 		}, nil
