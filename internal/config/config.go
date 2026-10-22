@@ -77,8 +77,21 @@ type Config struct {
 	ComplianceRoundTripMin          int
 	ComplianceFuzzyThreshold        int
 	ComplianceReloadMinutes         int
-	WorkerEnabled                   bool
-	WebhookAllowPrivateNetworks     bool
+	// Fraud detection observes reconciliation discrepancies for statistical
+	// frequency anomalies and micro-variance skimming.
+	FraudDetectionEnabled         bool
+	PagerDutySecurityRoutingKey   string
+	PagerDutyComplianceRoutingKey string
+	GeoIPDatabasePath             string
+	GeoScreenEnabled              bool
+	GeoBlockedCountries           string
+	GeoBlockVPN                   bool
+	GeoBlockTor                   bool
+	GeoBlockHosting               bool
+	GeoBlockProxy                 bool
+	GeoFailClosed                 bool
+	WorkerEnabled                 bool
+	WebhookAllowPrivateNetworks   bool
 	// RateLockExpiryInterval specifies the recurring interval for the rate lock expiration daemon (e.g. "@every 30s").
 	RateLockExpiryInterval string
 	// ClaimableBalanceSourceWalletID funds claimable balances whose request did
@@ -286,6 +299,13 @@ func Load() (*Config, error) {
 	viper.SetDefault("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES", "60")
 	viper.SetDefault("COMPLIANCE_FUZZY_THRESHOLD", "2")
 	viper.SetDefault("COMPLIANCE_RELOAD_MINUTES", "15")
+	viper.SetDefault("FRAUD_DETECTION_ENABLED", "true")
+	viper.SetDefault("GEO_SCREEN_ENABLED", "false")
+	viper.SetDefault("GEO_BLOCK_VPN", "true")
+	viper.SetDefault("GEO_BLOCK_TOR", "true")
+	viper.SetDefault("GEO_BLOCK_HOSTING", "true")
+	viper.SetDefault("GEO_BLOCK_PROXY", "true")
+	viper.SetDefault("GEO_FAIL_CLOSED", "true")
 	viper.SetDefault("WORKER_ENABLED", "true")
 	viper.SetDefault("TREASURY_BASE_RESERVE", "0.5")
 	viper.SetDefault("TREASURY_RESERVE_CACHE_TTL_SECONDS", "120")
@@ -432,6 +452,17 @@ func Load() (*Config, error) {
 		ComplianceRoundTripMin:          viper.GetInt("COMPLIANCE_ROUND_TRIP_WINDOW_MINUTES"),
 		ComplianceFuzzyThreshold:        viper.GetInt("COMPLIANCE_FUZZY_THRESHOLD"),
 		ComplianceReloadMinutes:         viper.GetInt("COMPLIANCE_RELOAD_MINUTES"),
+		FraudDetectionEnabled:           viper.GetBool("FRAUD_DETECTION_ENABLED"),
+		PagerDutySecurityRoutingKey:     viper.GetString("PAGERDUTY_SECURITY_ROUTING_KEY"),
+		PagerDutyComplianceRoutingKey:   viper.GetString("PAGERDUTY_COMPLIANCE_ROUTING_KEY"),
+		GeoIPDatabasePath:               viper.GetString("GEOIP_DATABASE_PATH"),
+		GeoScreenEnabled:                viper.GetBool("GEO_SCREEN_ENABLED"),
+		GeoBlockedCountries:             viper.GetString("GEO_BLOCKED_COUNTRIES"),
+		GeoBlockVPN:                     viper.GetBool("GEO_BLOCK_VPN"),
+		GeoBlockTor:                     viper.GetBool("GEO_BLOCK_TOR"),
+		GeoBlockHosting:                 viper.GetBool("GEO_BLOCK_HOSTING"),
+		GeoBlockProxy:                   viper.GetBool("GEO_BLOCK_PROXY"),
+		GeoFailClosed:                   viper.GetBool("GEO_FAIL_CLOSED"),
 		WorkerEnabled:                   workerEnabled,
 		WebhookAllowPrivateNetworks:     webhookAllowPrivateNetworks,
 		IndexerPaymentsPageLimit:        viper.GetInt("INDEXER_PAYMENTS_PAGE_LIMIT"),

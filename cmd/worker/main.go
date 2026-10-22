@@ -358,6 +358,16 @@ func main() {
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
 	).WithDriftThreshold(driftThreshold)
+	if cfg.FraudDetectionEnabled {
+		pagerDuty := alerting.NewPagerDutyClient(alerting.PagerDutyConfig{
+			SecurityRoutingKey:   cfg.PagerDutySecurityRoutingKey,
+			ComplianceRoutingKey: cfg.PagerDutyComplianceRoutingKey,
+			Service:              "nexora-worker",
+		})
+		reconcileSvc = reconcileSvc.WithFraudDetector(
+			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
+		)
+	}
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	srv := asynq.NewServer(asynqOpt, asynq.Config{

@@ -130,6 +130,7 @@ type Service struct {
 	driftRepo         DriftRepository
 	driftMu           sync.RWMutex
 	currentDrift      map[string]DriftSnapshot
+	fraudDetector     *FraudDetector
 }
 
 func NewService(
@@ -173,6 +174,13 @@ func NewService(
 // review, while the drift threshold decides what pages an operator.
 func (s *Service) WithDriftThreshold(threshold decimal.Decimal) *Service {
 	s.driftThreshold = threshold
+	return s
+}
+
+// WithFraudDetector attaches the discrepancy anomaly detector. It is optional:
+// when nil, reconciliation keeps its pre-fraud-detection behaviour.
+func (s *Service) WithFraudDetector(detector *FraudDetector) *Service {
+	s.fraudDetector = detector
 	return s
 }
 
@@ -932,6 +940,30 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 				WalletID:        w.ID,
 				DetectedAt:      now.Format(time.RFC3339),
 			})
+		}
+		if s.fraudDetector != nil {
+			findings, fraudErr := s.fraudDetector.Observe(ctx, FraudObservation{
+				TenantID:       tenantID,
+				AccountID:      w.ID,
+				WalletID:       w.ID,
+				RouteID:        w.ID,
+				Asset:          asset,
+				TransferAmount: expected,
+				Discrepancy:    drift,
+				ObservedAt:     now,
+			})
+			if fraudErr != nil {
+				logger.Error().Err(fraudErr).Str("wallet_id", w.ID).
+					Msg("reconcile: fraud containment or alerting failed")
+			}
+			for _, finding := range findings {
+				logger.Warn().
+					Str("kind", string(finding.Kind)).
+					Str("tenant_id", finding.TenantID).
+					Str("account_id", finding.AccountID).
+					Float64("score", finding.Score).
+					Msg("reconcile: fraud pattern detected and contained")
+			}
 		}
 		// Also surface the drift as a webhook event so tenants subscribed to
 		// reconciliation.drift are notified, not just platform operators.
