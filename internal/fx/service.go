@@ -46,6 +46,13 @@ type Service interface {
 	WithMarginEngine(engine MarginEngine) Service
 }
 
+// WithMarginEngine attaches tenant-level FX markup handling to the service.
+// Passing nil keeps flat pricing (the default when the engine is not wired).
+func (s *service) WithMarginEngine(engine MarginEngine) Service {
+	s.marginEngine = engine
+	return s
+}
+
 type service struct {
 	walletRepo     wallet.Repository
 	conversionRepo ConversionRepo
@@ -63,6 +70,10 @@ type service struct {
 
 	activePairsMu sync.RWMutex
 	activePairs   map[string]time.Time
+
+	// Optional hooks wired after construction.
+	marginEngine MarginEngine
+	sanity       *SanityChecker
 }
 
 // markUsedScript atomically verifies ownership and then claims a quote.

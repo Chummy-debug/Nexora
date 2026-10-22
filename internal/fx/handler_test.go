@@ -38,6 +38,10 @@ func (m *mockFXService) GetRates(ctx context.Context, from, to string) (*RateRes
 	return nil, nil
 }
 
+// WithMarginEngine satisfies the fx.Service interface; handler tests never
+// exercise tenant margins, so the engine stays nil.
+func (m *mockFXService) WithMarginEngine(MarginEngine) Service { return m }
+
 func (m *mockFXService) BindQuoteToTransfer(ctx context.Context, tenantID, quoteID, transferID string) (*domain.Quote, error) {
 	return nil, nil
 }

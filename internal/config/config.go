@@ -62,23 +62,27 @@ type Config struct {
 	AuditAttestationContractID      string
 	AuditAttestationMaintainer      string
 	AuditAttestationEncryptedSecret string
-	ContractWalletWasmHash          string
-	ContractWalletSpendingLimit     string
-	ContractWalletWindowSeconds     int
-	ContractWalletRecoveryQuota     int
-	YellowCardAPIKey                string
-	YellowCardWebhookKey            string
-	YellowCardSandbox               bool
-	ComplianceEnabled               bool
-	OFACSDNURL                      string
-	ComplianceStructuringUnit       string
-	ComplianceVelocityMax           int
-	ComplianceVelocityWindowMin     int
-	ComplianceRoundTripMin          int
-	ComplianceFuzzyThreshold        int
-	ComplianceReloadMinutes         int
-	WorkerEnabled                   bool
-	WebhookAllowPrivateNetworks     bool
+	// AuditChainVerifyIntervalSec sets how often the worker re-verifies the
+	// tamper-proof audit hash chain. Set to 0 to disable the background
+	// verifier. Default: 900 (fifteen minutes).
+	AuditChainVerifyIntervalSec int
+	ContractWalletWasmHash      string
+	ContractWalletSpendingLimit string
+	ContractWalletWindowSeconds int
+	ContractWalletRecoveryQuota int
+	YellowCardAPIKey            string
+	YellowCardWebhookKey        string
+	YellowCardSandbox           bool
+	ComplianceEnabled           bool
+	OFACSDNURL                  string
+	ComplianceStructuringUnit   string
+	ComplianceVelocityMax       int
+	ComplianceVelocityWindowMin int
+	ComplianceRoundTripMin      int
+	ComplianceFuzzyThreshold    int
+	ComplianceReloadMinutes     int
+	WorkerEnabled               bool
+	WebhookAllowPrivateNetworks bool
 	// RateLockExpiryInterval specifies the recurring interval for the rate lock expiration daemon (e.g. "@every 30s").
 	RateLockExpiryInterval string
 	// ClaimableBalanceSourceWalletID funds claimable balances whose request did
@@ -253,6 +257,10 @@ func Load() (*Config, error) {
 	viper.AutomaticEnv()
 
 	viper.SetDefault("PORT", "3000")
+	// Background verifier cadence for the tamper-proof audit hash chain;
+	// set AUDIT_CHAIN_VERIFY_INTERVAL_SEC to 0 (or a negative value) to
+	// disable the verifier.
+	viper.SetDefault("AUDIT_CHAIN_VERIFY_INTERVAL_SEC", 900)
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", defaultCORSOrigins)
 	viper.SetDefault("ENV", "development")
 	viper.SetDefault("LOG_LEVEL", "info")
@@ -417,6 +425,7 @@ func Load() (*Config, error) {
 		AuditAttestationContractID:      viper.GetString("AUDIT_ATTESTATION_CONTRACT_ID"),
 		AuditAttestationMaintainer:      viper.GetString("AUDIT_ATTESTATION_MAINTAINER"),
 		AuditAttestationEncryptedSecret: viper.GetString("AUDIT_ATTESTATION_ENCRYPTED_SECRET"),
+		AuditChainVerifyIntervalSec:     viper.GetInt("AUDIT_CHAIN_VERIFY_INTERVAL_SEC"),
 		ContractWalletWasmHash:          viper.GetString("CONTRACT_WALLET_WASM_HASH"),
 		ContractWalletSpendingLimit:     viper.GetString("CONTRACT_WALLET_SPENDING_LIMIT"),
 		ContractWalletWindowSeconds:     viper.GetInt("CONTRACT_WALLET_WINDOW_SECONDS"),

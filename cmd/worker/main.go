@@ -178,6 +178,18 @@ func main() {
 	}
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "nexora-worker")
+
+	// Periodically re-verify the tamper-proof audit hash chain and page
+	// security operations the moment a modified, inserted, or deleted audit
+	// record is detected. Set AUDIT_CHAIN_VERIFY_INTERVAL_SEC=0 to disable.
+	if cfg.AuditChainVerifyIntervalSec > 0 {
+		chainVerifier := audit.NewChainVerifier(
+			audit.NewTamperProofRepo(db),
+			audit.NewAlertClientAlerter(alertClient),
+			time.Duration(cfg.AuditChainVerifyIntervalSec)*time.Second,
+		)
+		go chainVerifier.Run(ctx)
+	}
 	asynqOpt, err := queue.AsynqRedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
 	if err != nil {
 		log.Fatal().Err(err).Msg("configure asynq redis")

@@ -23,6 +23,7 @@ func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Get("/", h.List)
 		r.Get("/export", h.Export)
+		r.Get("/bundle", h.Bundle)
 	}
 }
 
@@ -63,6 +64,21 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	if format == "csv" {
 		w.Header().Set("Content-Disposition", "attachment; filename=\"audit-log.csv\"")
 	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// Bundle serves the tamper-proof audit log bundle: every record plus its
+// hash-chain links, ready for external regulatory inspection.
+func (h *Handler) Bundle(w http.ResponseWriter, r *http.Request) {
+	data, contentType, err := h.svc.ExportBundle(r.Context())
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", "attachment; filename=\"audit-bundle.json\"")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }

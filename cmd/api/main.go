@@ -363,7 +363,9 @@ func main() {
 			WithGuardianGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	}
 	auditRepo := postgres.NewAuditRepo(repoDB)
-	auditSvc := audit.NewService(auditRepo)
+	// The tamper-proof repo is fed the primary pool directly so chain scans
+	// never read a lagging replica and mistake replication lag for tampering.
+	auditSvc := audit.NewService(auditRepo, audit.NewTamperProofRepo(db))
 	reconcileHandler = reconcileHandler.WithAuditLogger(auditSvc)
 	auditHandler := audit.NewHandler(auditSvc)
 	usageHandler := server.NewUsageHandler(repoDB)

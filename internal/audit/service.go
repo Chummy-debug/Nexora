@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Lumen-Nexora/Nexora/internal/domain"
-	"github.com/Lumen-Nexora/Nexora/internal/postgres"
 	"github.com/Lumen-Nexora/Nexora/internal/tenant"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -23,14 +23,29 @@ type Service interface {
 	Log(r *http.Request, action, resourceType, resourceID string, metadata map[string]interface{})
 	List(ctx context.Context, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
 	Export(ctx context.Context, filter domain.AuditFilter, format string) ([]byte, string, error)
+	// ExportBundle returns the whole tamper-proof audit chain as a JSON
+	// bundle that external regulatory inspections can re-verify offline.
+	ExportBundle(ctx context.Context) ([]byte, string, error)
+}
+
+// eventStore is the narrow read/write surface the audit service needs from
+// storage. Declared locally so the audit package never imports the postgres
+// package (whose repositories import services, closing an import cycle).
+// *postgres.AuditRepo satisfies it structurally.
+type eventStore interface {
+	Create(ctx context.Context, event *domain.AuditEvent) error
+	List(ctx context.Context, tenantID string, mode domain.Mode, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
 }
 
 type service struct {
-	repo *postgres.AuditRepo
+	repo eventStore
+	// tamper chains every append onto the SHA-256 row-hash chain. nil keeps
+	// the plain append-only write (used when tamper-proofing is not wired).
+	tamper TamperProofStore
 }
 
-func NewService(repo *postgres.AuditRepo) Service {
-	return &service{repo: repo}
+func NewService(repo eventStore, tamper TamperProofStore) Service {
+	return &service{repo: repo, tamper: tamper}
 }
 
 func (s *service) Record(ctx context.Context, event *domain.AuditEvent) error {
@@ -60,6 +75,18 @@ func (s *service) Record(ctx context.Context, event *domain.AuditEvent) error {
 			event.ActorType = "system"
 			event.ActorID = "system"
 		}
+	}
+	if err := s.append(ctx, event); err != nil {
+		return err
+	}
+	return nil
+}
+
+// append routes the write through the tamper-proof hash chain when one is
+// wired, and falls back to the plain append-only insert otherwise.
+func (s *service) append(ctx context.Context, event *domain.AuditEvent) error {
+	if s.tamper != nil {
+		return s.tamper.Append(ctx, event)
 	}
 	return s.repo.Create(ctx, event)
 }
@@ -103,7 +130,7 @@ func (s *service) Log(r *http.Request, action, resourceType, resourceID string, 
 		CreatedAt:    time.Now().UTC(),
 	}
 
-	if err := s.repo.Create(ctx, event); err != nil {
+	if err := s.append(ctx, event); err != nil {
 		log.Error().Err(err).Str("tenant_id", tenantID).Str("action", action).Msg("failed to persist audit log")
 	}
 }
@@ -167,6 +194,24 @@ func (s *service) Export(ctx context.Context, filter domain.AuditFilter, format 
 	})
 	if err != nil {
 		return nil, "", err
+	}
+	return data, "application/json", nil
+}
+
+// ExportBundle serializes the whole tamper-proof audit chain as a JSON
+// bundle that external regulatory inspectors can re-verify offline with
+// VerifyChainBundle.
+func (s *service) ExportBundle(ctx context.Context) ([]byte, string, error) {
+	if s.tamper == nil {
+		return nil, "", errors.New("tamper-proof audit chain is not configured")
+	}
+	bundle, err := ExportChainBundle(ctx, s.tamper)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := json.Marshal(bundle)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode audit bundle: %w", err)
 	}
 	return data, "application/json", nil
 }

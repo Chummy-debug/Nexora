@@ -156,3 +156,7 @@ func (m *mockService) Export(ctx context.Context, filter domain.AuditFilter, for
 	}
 	return []byte(`{"events":[{"id":"evt-1"}]}`), "application/json", nil
 }
+
+func (m *mockService) ExportBundle(ctx context.Context) ([]byte, string, error) {
+	return []byte(`{"schema":"nexora.audit-chain/v1"}`), "application/json", nil
+}
