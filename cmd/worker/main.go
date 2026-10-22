@@ -295,6 +295,7 @@ func main() {
 	var complianceWorker *compliance.Worker
 	if cfg.ComplianceEnabled {
 		sanctionsSet := compliance.NewSanctionsSet()
+		sanctionsSet.RequireSources(compliance.SourceOFAC, compliance.SourceUN, compliance.SourceEU)
 		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
 			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
 		}
@@ -318,7 +319,7 @@ func main() {
 		}
 
 		screener := compliance.NewCompositeScreener(
-			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewSanctionsScreenerWithSimilarity(sanctionsSet, cfg.ComplianceSimilarityThreshold),
 			velocityScreener,
 		)
 
@@ -329,7 +330,7 @@ func main() {
 			compliance.NewHTTPSDNSource(cfg.OFACSDNURL, nil),
 			sanctionsSet,
 			webhookSvc,
-		)
+		).WithOfficialSources(cfg.UNSanctionsURL, cfg.EUSanctionsURL)
 	}
 
 	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
