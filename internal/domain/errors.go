@@ -81,6 +81,7 @@ var (
 	ErrMarginCeilingExceeded      = errors.New("FX margin markup exceeds allowable ceilings")
 	ErrCorridorConflict           = errors.New("corridor from_asset and to_asset cannot be identical")
 	ErrDuplicateMarginTier        = errors.New("margin configuration already exists for this tenant, corridor, and tier")
+	ErrNetworkFeeNotFound         = errors.New("network fee charge not found")
 )
 
 // FX quote sanity-check errors (issue #82). A quote that trips any of these is

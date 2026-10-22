@@ -115,13 +115,17 @@ func main() {
 	signerResolver := stellar.NewModeAwareSigners(signer, testSigner)
 
 	feeSvc := fees.NewService(feeRepo)
+	networkFeeAccounting := fees.NewNetworkFeeAccounting(feeRepo, fees.NewCoinGeckoHistoricalRateSource())
+	networkFeeRecorder := fees.NewNetworkFeeSettlementRecorder(networkFeeAccounting)
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
 		cfg.StellarLiveNetwork, map[string]string{
 			"USDC": cfg.StellarUSDCIssuer,
 			"EURC": cfg.StellarEURCIssuer,
 		}, cfg.PlatformFeeWalletPublicKey,
-	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+	).WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver).
+		WithSettlementDetailsRecorder(networkFeeRecorder)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.NewWithConfig(walletRepo, txRepo, stellarClient, indexer.Config{
