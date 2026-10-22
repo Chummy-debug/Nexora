@@ -609,6 +609,87 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/wallets/{id}/simulate:
+    post:
+      operationId: simulateWalletPayment
+      summary: Predict a custodial classic payment before signing
+      description: >-
+        Read-only local validation using Horizon account, latest ledger and fee
+        statistics reads. Horizon has no classic-payment dry-run endpoint.
+        Never signs or broadcasts. Supports one native or explicitly issued
+        credit-asset payment, not contract invocations or arbitrary operations.
+        Checks reserve sponsorship, selling/buying liabilities, trustline
+        authorization/capacity and optional sequence. Redis snapshots expire
+        after two seconds and are isolated by network. Warm-cache latency targets
+        100ms; upstream misses are bounded by the configured Horizon timeout.
+        Success is a prediction, not network execution or signature validation.
+        Reload balances and sequence before signing; concurrent transactions and
+        changing fees can invalidate it. No sequence reservation is made.
+      tags: [Wallets]
+      parameters:
+      - $ref: '#/components/parameters/WalletID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [destination, amount]
+              properties:
+                destination:
+                  type: string
+                  description: Existing Stellar G-address
+                asset:
+                  type: string
+                  default: XLM
+                issuer:
+                  type: string
+                  description: Required for credit assets; omitted for XLM
+                amount:
+                  type: string
+                  description: Positive amount with at most seven fractional digits
+                sequence:
+                  type: string
+                  description: Optional proposed transaction sequence; must equal source sequence plus one
+      responses:
+        '200':
+          description: Prediction (including unsuccessful validation)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, code, estimated_fee_stroops, sequence, ledger, cached, state_cache_ttl_ms, warning]
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: string
+                    description: ok or a failed reserve, balance, account, sequence or trustline check
+                  estimated_fee_stroops:
+                    type: string
+                    description: One-operation fee estimate; maximum of ledger base fee and p95 charged fee
+                  sequence:
+                    type: string
+                    description: Next sequence, empty when source account is missing
+                  ledger:
+                    type: integer
+                  cached:
+                    type: boolean
+                    description: All network/source/destination snapshots were cache hits
+                  state_cache_ttl_ms:
+                    type: integer
+                    description: Configured cache TTL, not a guarantee of ledger freshness
+                  warning:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /v1/wallets/{id}/trustlines:
     post:
       operationId: createTrustline

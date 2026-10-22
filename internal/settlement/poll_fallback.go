@@ -63,9 +63,11 @@ type WalletBalanceReleaser interface {
 	ReleaseReservedBalance(ctx context.Context, walletID string, asset string, amount decimal.Decimal) error
 }
 
-// SettlementDetailsRecorder provides an interface for persisting ledger sequence and fee charged.
+// SettlementDetailsRecorder provides an interface for persisting ledger
+// sequence, exact fee charged and the ledger close time that anchors the
+// historical FX valuation.
 type SettlementDetailsRecorder interface {
-	RecordSettlementDetails(ctx context.Context, txID, txHash string, ledgerSequence int32, feeCharged int64) error
+	RecordSettlementDetails(ctx context.Context, txID, txHash string, tenantID *string, ledgerSequence int32, feeCharged int64, ledgerClosedAt time.Time) error
 }
 
 // ConfirmedRecord stores on-chain confirmation details recorded by the fallback poller.
@@ -431,7 +433,7 @@ func (p *FallbackPoller) handleConfirmedTransaction(
 	p.confirmedMu.Unlock()
 
 	if p.detailsRecorder != nil {
-		if err := p.detailsRecorder.RecordSettlementDetails(ctx, tx.ID, tx.TxHash, horizonTx.Ledger, horizonTx.FeeCharged); err != nil {
+		if err := p.detailsRecorder.RecordSettlementDetails(ctx, tx.ID, tx.TxHash, tx.TenantID, horizonTx.Ledger, horizonTx.FeeCharged, horizonTx.LedgerCloseTime); err != nil {
 			log.Warn().Err(err).Str("tx_id", tx.ID).Msg("settlement poller: failed recording settlement details")
 		}
 	}

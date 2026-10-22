@@ -115,13 +115,17 @@ func main() {
 	signerResolver := stellar.NewModeAwareSigners(signer, testSigner)
 
 	feeSvc := fees.NewService(feeRepo)
+	networkFeeAccounting := fees.NewNetworkFeeAccounting(feeRepo, fees.NewCoinGeckoHistoricalRateSource())
+	networkFeeRecorder := fees.NewNetworkFeeSettlementRecorder(networkFeeAccounting)
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
 		cfg.StellarLiveNetwork, map[string]string{
 			"USDC": cfg.StellarUSDCIssuer,
 			"EURC": cfg.StellarEURCIssuer,
 		}, cfg.PlatformFeeWalletPublicKey,
-	).WithClientResolver(clientResolver).WithSignerResolver(signerResolver)
+	).WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver).
+		WithSettlementDetailsRecorder(networkFeeRecorder)
 	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.NewWithConfig(walletRepo, txRepo, stellarClient, indexer.Config{
@@ -291,6 +295,7 @@ func main() {
 	var complianceWorker *compliance.Worker
 	if cfg.ComplianceEnabled {
 		sanctionsSet := compliance.NewSanctionsSet()
+		sanctionsSet.RequireSources(compliance.SourceOFAC, compliance.SourceUN, compliance.SourceEU)
 		if err := sanctionsSet.LoadFromRepository(ctx, complianceRepo); err != nil {
 			log.Error().Err(err).Msg("compliance: initial sanctions load failed; transfers will be held until it succeeds")
 		}
@@ -314,7 +319,7 @@ func main() {
 		}
 
 		screener := compliance.NewCompositeScreener(
-			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewSanctionsScreenerWithSimilarity(sanctionsSet, cfg.ComplianceSimilarityThreshold),
 			velocityScreener,
 		)
 
@@ -325,7 +330,7 @@ func main() {
 			compliance.NewHTTPSDNSource(cfg.OFACSDNURL, nil),
 			sanctionsSet,
 			webhookSvc,
-		)
+		).WithOfficialSources(cfg.UNSanctionsURL, cfg.EUSanctionsURL)
 	}
 
 	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
@@ -354,6 +359,16 @@ func main() {
 		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
 		cfg.PlatformFeeWalletPublicKey,
 	).WithDriftThreshold(driftThreshold)
+	if cfg.FraudDetectionEnabled {
+		pagerDuty := alerting.NewPagerDutyClient(alerting.PagerDutyConfig{
+			SecurityRoutingKey:   cfg.PagerDutySecurityRoutingKey,
+			ComplianceRoutingKey: cfg.PagerDutyComplianceRoutingKey,
+			Service:              "nexora-worker",
+		})
+		reconcileSvc = reconcileSvc.WithFraudDetector(
+			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
+		)
+	}
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	srv := asynq.NewServer(asynqOpt, asynq.Config{

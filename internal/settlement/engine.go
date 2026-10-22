@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 	stellarnet "github.com/stellar/go/network"
+	"github.com/stellar/go/protocols/horizon"
 	"github.com/stellar/go/txnbuild"
 )
 
@@ -29,18 +30,14 @@ type Engine struct {
 	// clientResolver and signerResolver select the live or testnet client for
 	// the request's environment. They are nil for single-environment callers,
 	// in which case stellar/signer are used directly.
-	clientResolver stellar.ClientResolver
-	signer         stellar.Signer
-	signerResolver stellar.SignerResolver
-	network        string
-	assetIssuers   map[string]string
-	feeWallet      string
-	feePolicy      *FeePolicy
-	balanceAlertSvc BalanceAlertService
-}
-
-type BalanceAlertService interface {
-	EvaluateWalletBalances(ctx context.Context, walletID string, balances map[string]decimal.Decimal) error
+	clientResolver  stellar.ClientResolver
+	signer          stellar.Signer
+	signerResolver  stellar.SignerResolver
+	network         string
+	assetIssuers    map[string]string
+	feeWallet       string
+	feePolicy       *FeePolicy
+	detailsRecorder SettlementDetailsRecorder
 }
 
 func NewEngine(
@@ -54,14 +51,14 @@ func NewEngine(
 	feeWallet string,
 ) *Engine {
 	return &Engine{
-		txRepo:         txRepo,
-		walletRepo:     walletRepo,
-		feeSvc:         feeSvc,
-		stellar:        stellarClient,
-		signer:         signer,
-		network:        network,
-		assetIssuers:   assetIssuers,
-		feeWallet:      feeWallet,
+		txRepo:       txRepo,
+		walletRepo:   walletRepo,
+		feeSvc:       feeSvc,
+		stellar:      stellarClient,
+		signer:       signer,
+		network:      network,
+		assetIssuers: assetIssuers,
+		feeWallet:    feeWallet,
 	}
 }
 
@@ -81,9 +78,10 @@ func (e *Engine) WithFeePolicy(policy *FeePolicy) *Engine {
 	return e
 }
 
-// WithBalanceAlertService attaches a wallet balance alert service to the settlement engine.
-func (e *Engine) WithBalanceAlertService(svc BalanceAlertService) *Engine {
-	e.balanceAlertSvc = svc
+// WithSettlementDetailsRecorder attaches the recorder that captures the exact
+// Horizon fee_charged and ledger close time for network-fee accounting.
+func (e *Engine) WithSettlementDetailsRecorder(recorder SettlementDetailsRecorder) *Engine {
+	e.detailsRecorder = recorder
 	return e
 }
 
@@ -260,7 +258,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 
 	switch {
 	case outcome.confirmed:
-		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet)
+		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet, &outcome.result)
 		return nil
 
 	case outcome.class != stellar.SubmitDefinite:
@@ -290,7 +288,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 // balances, and records any platform fee collected. Shared by the direct
 // submission-success path and by tryResolveAmbiguous once a hash lookup
 // confirms an initially-ambiguous submission did land on-chain.
-func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, txID, txHash string, srcWallet, dstWallet *domain.Wallet) {
+func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, txID, txHash string, srcWallet, dstWallet *domain.Wallet, horizonTx *horizon.Transaction) {
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).Msg("failed to update confirmed status")
 	}
@@ -327,6 +325,15 @@ func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, 
 			log.Error().Err(err).Str("tx_id", txID).Msg("failed to record fee collection")
 		}
 	}
+
+	if e.detailsRecorder != nil && horizonTx != nil {
+		if err := e.detailsRecorder.RecordSettlementDetails(
+			ctx, txID, txHash, tx.TenantID, horizonTx.Ledger, horizonTx.FeeCharged, horizonTx.LedgerCloseTime,
+		); err != nil {
+			log.Warn().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).
+				Msg("failed to record network fee accounting")
+		}
+	}
 }
 
 // tryResolveAmbiguous looks the transaction's hash up on Horizon once, right
@@ -345,7 +352,7 @@ func (e *Engine) tryResolveAmbiguous(ctx context.Context, tx *domain.Transaction
 	if horizonTx.Successful {
 		log.Info().Str("tx_id", txID).Str("tx_hash", txHash).
 			Msg("settlement: resolved ambiguous submission as confirmed via Horizon")
-		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet)
+		e.finalizeConfirmed(ctx, tx, txID, txHash, srcWallet, dstWallet, &horizonTx)
 		return true
 	}
 
@@ -388,6 +395,7 @@ type submitOutcome struct {
 	confirmed bool
 	class     stellar.SubmitClass
 	err       error
+	result    horizon.Transaction
 }
 
 // submitWithRetry resubmits the same signed transaction envelope on
@@ -411,7 +419,7 @@ func (e *Engine) submitWithRetry(ctx context.Context, tx *txnbuild.Transaction) 
 
 		resp, err := stellar.SubmitTransactionWithContext(ctx, e.client(ctx), tx)
 		if err == nil {
-			return submitOutcome{hash: resp.Hash, confirmed: true}
+			return submitOutcome{hash: resp.Hash, confirmed: true, result: resp}
 		}
 
 		lastErr = err
