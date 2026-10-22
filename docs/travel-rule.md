@@ -85,7 +85,10 @@ because its signature is the authentication mechanism.
 
 Transfers remain `compliance_hold` until a valid confirmation is received. A
 separate sanctions/manual-review hold is never cleared by a Travel Rule
-confirmation. A rejected exchange moves the transfer to `failed`.
+confirmation. A rejected exchange moves the transfer to `failed`. If sending to
+a VASP fails, the encrypted pending record is retained and the transfer remains
+held; retry scheduling and operational alerting must be configured by the
+deployment.
 
 ## Protocol integration note
 

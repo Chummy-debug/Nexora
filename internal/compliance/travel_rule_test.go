@@ -330,6 +330,47 @@ func TestTravelRuleConfirmationDoesNotClearIndependentComplianceHold(t *testing.
 	}
 }
 
+func TestStaleConfirmationCannotReleaseTransfer(t *testing.T) {
+	service, _, sender, gate, queue, tx, request, _ := setupTravelRuleTest(t, false)
+	if _, err := service.Begin(context.Background(), tx, request, domain.StatusPending); err != nil {
+		t.Fatal(err)
+	}
+	confirmation := signedTestConfirmation(sender.envelope, "vasp-recipient", sender.privateKey, string(domain.TravelRuleExchangeConfirmed))
+	confirmation.IssuedAt = time.Now().UTC().Add(-TravelRuleConfirmationMaxAge - time.Minute)
+	confirmation.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(sender.privateKey, ConfirmationSigningBytes(confirmation)))
+	if err := service.HandleConfirmation(context.Background(), confirmation); !errors.Is(err, ErrInvalidTravelRuleConfirmation) {
+		t.Fatalf("HandleConfirmation err = %v, want stale confirmation rejected", err)
+	}
+	if len(gate.statuses) != 0 || len(queue.ids) != 0 {
+		t.Fatalf("stale confirmation changed transfer: statuses=%v queue=%v", gate.statuses, queue.ids)
+	}
+}
+
+func TestMismatchedEnvelopeDigestCannotReleaseTransfer(t *testing.T) {
+	service, _, sender, gate, queue, tx, request, _ := setupTravelRuleTest(t, false)
+	if _, err := service.Begin(context.Background(), tx, request, domain.StatusPending); err != nil {
+		t.Fatal(err)
+	}
+	confirmation := signedTestConfirmation(sender.envelope, "vasp-recipient", sender.privateKey, string(domain.TravelRuleExchangeConfirmed))
+	confirmation.EnvelopeSHA256 = strings.Repeat("0", 64)
+	confirmation.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(sender.privateKey, ConfirmationSigningBytes(confirmation)))
+	if err := service.HandleConfirmation(context.Background(), confirmation); !errors.Is(err, ErrInvalidTravelRuleConfirmation) {
+		t.Fatalf("HandleConfirmation err = %v, want mismatched digest rejected", err)
+	}
+	if len(gate.statuses) != 0 || len(queue.ids) != 0 {
+		t.Fatalf("mismatched digest changed transfer: statuses=%v queue=%v", gate.statuses, queue.ids)
+	}
+}
+
+func TestUSDValuationFailureFailsClosed(t *testing.T) {
+	service, _, _, _, _, _, request, _ := setupTravelRuleTest(t, false)
+	service.valuator = fixedUSDValuator{err: errors.New("rate unavailable")}
+	required, err := service.Requires(context.Background(), "XLM", decimal.NewFromInt(1500), request)
+	if required || err == nil {
+		t.Fatalf("Requires = (%v, %v), want valuation failure", required, err)
+	}
+}
+
 func TestRejectedSignedConfirmationFailsTransfer(t *testing.T) {
 	service, _, sender, gate, queue, tx, request, _ := setupTravelRuleTest(t, false)
 	if _, err := service.Begin(context.Background(), tx, request, domain.StatusPending); err != nil {
