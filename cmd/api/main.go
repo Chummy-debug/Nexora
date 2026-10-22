@@ -204,6 +204,7 @@ func main() {
 	var complianceHandler *compliance.Handler
 	if cfg.ComplianceEnabled {
 		sanctionsSet := compliance.NewSanctionsSet()
+		sanctionsSet.RequireSources(compliance.SourceOFAC, compliance.SourceUN, compliance.SourceEU)
 
 		// Not fatal, unlike anchorRegistry.Load: screening fails closed, so an
 		// API that boots before the first SDN refresh holds transfers for
@@ -231,7 +232,7 @@ func main() {
 		}
 
 		screener := compliance.NewCompositeScreener(
-			compliance.NewSanctionsScreener(sanctionsSet, cfg.ComplianceFuzzyThreshold),
+			compliance.NewSanctionsScreenerWithSimilarity(sanctionsSet, cfg.ComplianceSimilarityThreshold),
 			velocityScreener,
 		)
 

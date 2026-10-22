@@ -71,6 +71,9 @@ type Config struct {
 	YellowCardSandbox               bool
 	ComplianceEnabled               bool
 	OFACSDNURL                      string
+	UNSanctionsURL                  string
+	EUSanctionsURL                  string
+	ComplianceSimilarityThreshold   float64
 	ComplianceStructuringUnit       string
 	ComplianceVelocityMax           int
 	ComplianceVelocityWindowMin     int
@@ -280,6 +283,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
 	viper.SetDefault("COMPLIANCE_ENABLED", "true")
 	viper.SetDefault("OFAC_SDN_URL", "https://sanctionslistservice.ofac.treas.gov/api/download/sdn.xml")
+	viper.SetDefault("UN_SANCTIONS_URL", "https://scsanctions.un.org/resources/xml/en/consolidated.xml")
+	viper.SetDefault("EU_SANCTIONS_URL", "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content")
+	viper.SetDefault("COMPLIANCE_SIMILARITY_THRESHOLD", 0.85)
 	viper.SetDefault("COMPLIANCE_STRUCTURING_UNIT", "1000")
 	viper.SetDefault("COMPLIANCE_VELOCITY_MAX_TRANSFERS", "10")
 	viper.SetDefault("COMPLIANCE_VELOCITY_WINDOW_MINUTES", "10")
@@ -426,6 +432,9 @@ func Load() (*Config, error) {
 		YellowCardSandbox:               ycSandbox,
 		ComplianceEnabled:               complianceEnabled,
 		OFACSDNURL:                      viper.GetString("OFAC_SDN_URL"),
+		UNSanctionsURL:                  viper.GetString("UN_SANCTIONS_URL"),
+		EUSanctionsURL:                  viper.GetString("EU_SANCTIONS_URL"),
+		ComplianceSimilarityThreshold:   viper.GetFloat64("COMPLIANCE_SIMILARITY_THRESHOLD"),
 		ComplianceStructuringUnit:       viper.GetString("COMPLIANCE_STRUCTURING_UNIT"),
 		ComplianceVelocityMax:           viper.GetInt("COMPLIANCE_VELOCITY_MAX_TRANSFERS"),
 		ComplianceVelocityWindowMin:     viper.GetInt("COMPLIANCE_VELOCITY_WINDOW_MINUTES"),

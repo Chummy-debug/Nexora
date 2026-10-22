@@ -3,6 +3,7 @@ package compliance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +33,33 @@ type nameEntry struct {
 // approach as anchor.Registry — so a reader never observes a half-applied
 // list.
 type SanctionsSet struct {
-	mu          sync.RWMutex
-	byAddress   map[string]string
-	names       []nameEntry
-	fuzzy       *FuzzySanctionsIndex
-	entityCount int
-	updatedAt   time.Time
-	loaded      bool
+	mu              sync.RWMutex
+	byAddress       map[string]string
+	names           []nameEntry
+	fuzzy           *FuzzySanctionsIndex
+	entityCount     int
+	updatedAt       time.Time
+	loaded          bool
+	requiredSources []string
 }
 
 func NewSanctionsSet() *SanctionsSet {
 	return &SanctionsSet{byAddress: make(map[string]string)}
+}
+
+// RequireSources configures the publisher lists needed before screening may
+// ever return clear. Configure this before the initial LoadFromRepository.
+// A source that has never loaded is distinct from a temporarily stale source:
+// the latter retains its last successful snapshot on refresh failure.
+func (s *SanctionsSet) RequireSources(sources ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requiredSources = append([]string(nil), sources...)
+	if s.loaded {
+		// If configured after initial load, require a fresh load. Never
+		// silently re-mark a partially populated set as ready.
+		s.loaded = false
+	}
 }
 
 // Replace swaps in a freshly parsed list.
@@ -79,6 +96,12 @@ func (s *SanctionsSet) Replace(entities []*domain.SanctionsEntity, updatedAt tim
 
 	// Build a separate immutable fuzzy index before publishing a refreshed set.
 	fuzzy := NewFuzzySanctionsIndex(entities)
+	sourcePresent := make(map[string]struct{})
+	for _, e := range entities {
+		if e != nil && normalizeName(e.Name) != "" {
+			sourcePresent[e.Source] = struct{}{}
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byAddress = byAddress
@@ -86,7 +109,14 @@ func (s *SanctionsSet) Replace(entities []*domain.SanctionsEntity, updatedAt tim
 	s.fuzzy = fuzzy
 	s.entityCount = len(entities)
 	s.updatedAt = updatedAt
-	s.loaded = true
+	ready := len(names) > 0
+	for _, src := range s.requiredSources {
+		if _, ok := sourcePresent[src]; !ok {
+			ready = false
+			break
+		}
+	}
+	s.loaded = ready
 }
 
 func (s *SanctionsSet) Loaded() bool {
@@ -190,15 +220,26 @@ func (s *SanctionsSet) StartReloader(ctx context.Context, repo SanctionsReader, 
 
 // SanctionsScreener matches the destination against the OFAC SDN set.
 type SanctionsScreener struct {
-	set            *SanctionsSet
-	fuzzyThreshold int
+	set                 *SanctionsSet
+	fuzzyThreshold      int
+	similarityThreshold float64
 }
 
 func NewSanctionsScreener(set *SanctionsSet, fuzzyThreshold int) *SanctionsScreener {
 	if fuzzyThreshold <= 0 {
 		fuzzyThreshold = DefaultFuzzyThreshold
 	}
-	return &SanctionsScreener{set: set, fuzzyThreshold: fuzzyThreshold}
+	return &SanctionsScreener{set: set, fuzzyThreshold: fuzzyThreshold, similarityThreshold: DefaultSimilarityThreshold}
+}
+
+// NewSanctionsScreenerWithSimilarity configures a [0,1] Jaro-Winkler/
+// Double Metaphone score threshold without changing the legacy constructor.
+func NewSanctionsScreenerWithSimilarity(set *SanctionsSet, threshold float64) *SanctionsScreener {
+	s := NewSanctionsScreener(set, DefaultFuzzyThreshold)
+	if threshold > 0 && threshold <= 1 {
+		s.similarityThreshold = threshold
+	}
+	return s
 }
 
 func (s *SanctionsScreener) Name() string { return "sanctions" }
@@ -224,15 +265,16 @@ func (s *SanctionsScreener) Screen(_ context.Context, req domain.ScreeningReques
 	// corporate entities and both sides of a transfer. A name can only hold
 	// for human review; never block automatically based on name similarity.
 	for _, value := range []string{req.ToFederation, req.ToName, req.FromName} {
-		if match, ok := s.set.MatchDetailedName(value, DefaultSimilarityThreshold); ok {
+		if match, ok := s.set.MatchDetailedName(value, s.similarityThreshold); ok {
 			rule := "sanctions_name_fuzzy_match"
 			if normalizeName(value) == normalizeName(match.EntityName) {
 				rule = "sanctions_name_match"
 			}
 			return domain.ScreeningDecision{
-				Status:          domain.ScreeningHold,
-				RulesFired:      []string{rule},
-				Reason:          "name has a possible sanctions-list match; manual review required",
+				Status:     domain.ScreeningHold,
+				RulesFired: []string{rule},
+				Reason: fmt.Sprintf("possible sanctions-list name match; name=%s, source=%s, entity_id=%s, score=%.4f, jaro_winkler=%.4f, phonetic=%t; manual review required",
+					match.EntityName, match.Source, match.EntityID, match.Score, match.JaroWinkler, match.PhoneticMatch),
 				MatchedEntity:   match.EntityName,
 				MatchedEntityID: match.EntityID,
 				MatchedSource:   match.Source,
@@ -240,23 +282,6 @@ func (s *SanctionsScreener) Screen(_ context.Context, req domain.ScreeningReques
 				RiskScore:       int(match.Score * 80),
 			}, nil
 		}
-	}
-
-	// Preserve the existing edit-distance fallback for older callers. This
-	// also maintains historic conservative hold semantics for near-misses
-	// not covered by any phonetic posting or prefix bucket.
-	if entity, dist, ok := s.set.MatchName(req.ToFederation, s.fuzzyThreshold); ok {
-		rule := "sanctions_name_match"
-		if dist > 0 {
-			rule = "sanctions_name_fuzzy_match"
-		}
-		return domain.ScreeningDecision{
-			Status:        domain.ScreeningHold,
-			RulesFired:    []string{rule},
-			Reason:        "destination name closely matches a sanctions-list entry",
-			MatchedEntity: entity,
-			RiskScore:     80 - dist*10,
-		}, nil
 	}
 
 	return domain.ScreeningDecision{Status: domain.ScreeningClear}, nil

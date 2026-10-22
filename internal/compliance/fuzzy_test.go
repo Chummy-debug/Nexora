@@ -163,3 +163,46 @@ func BenchmarkSanctionsScreenerIndexedName(b *testing.B) {
 		}
 	}
 }
+
+// Benchmark a realistic no-hit, for which the old Levenshtein fallback
+// examined every sanctioned name and grew linearly with list size.
+func BenchmarkSanctionsScreenerNegative(b *testing.B) {
+	entries := make([]*domain.SanctionsEntity, 30000)
+	for i := range entries {
+		entries[i] = &domain.SanctionsEntity{UID: fmt.Sprintf("uid-%05d", i),
+			Source: SourceOFAC, Name: fmt.Sprintf("CORPORATE COUNTERPARTY %05d SERVICE", i)}
+	}
+	set := NewSanctionsSet()
+	set.Replace(entries, time.Now())
+	s := NewSanctionsScreenerWithSimilarity(set, .85)
+	req := domain.ScreeningRequest{ToFederation: "EXTERNAL UNAFFILIATED PAYEE"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		decision, err := s.Screen(context.Background(), req)
+		if err != nil || decision.Status != domain.ScreeningClear {
+			b.Fatalf("expected clear: %+v, %v", decision, err)
+		}
+	}
+}
+
+// Shared corporate terms exercise a busy phonetic posting list.
+func BenchmarkSanctionsScreenerBusyBucket(b *testing.B) {
+	entries := make([]*domain.SanctionsEntity, 30000)
+	for i := range entries {
+		entries[i] = &domain.SanctionsEntity{UID: fmt.Sprintf("uid-%05d", i),
+			Source: SourceOFAC, Name: fmt.Sprintf("CORPORATE COUNTERPARTY %05d SERVICE", i)}
+	}
+	set := NewSanctionsSet()
+	set.Replace(entries, time.Now())
+	s := NewSanctionsScreenerWithSimilarity(set, .85)
+	req := domain.ScreeningRequest{ToFederation: "CORPORATE COUNTERPARTY 99999 SERVICE"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		decision, err := s.Screen(context.Background(), req)
+		if err != nil || decision.Status != domain.ScreeningHold {
+			b.Fatalf("expected hold for a single changed digit: %+v, %v", decision, err)
+		}
+	}
+}
