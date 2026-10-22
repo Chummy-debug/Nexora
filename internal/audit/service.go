@@ -23,29 +23,20 @@ type Service interface {
 	Log(r *http.Request, action, resourceType, resourceID string, metadata map[string]interface{})
 	List(ctx context.Context, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
 	Export(ctx context.Context, filter domain.AuditFilter, format string) ([]byte, string, error)
-	// ExportBundle returns the whole tamper-proof audit chain as a JSON
-	// bundle that external regulatory inspections can re-verify offline.
-	ExportBundle(ctx context.Context) ([]byte, string, error)
-}
-
-// eventStore is the narrow read/write surface the audit service needs from
-// storage. Declared locally so the audit package never imports the postgres
-// package (whose repositories import services, closing an import cycle).
-// *postgres.AuditRepo satisfies it structurally.
-type eventStore interface {
-	Create(ctx context.Context, event *domain.AuditEvent) error
-	List(ctx context.Context, tenantID string, mode domain.Mode, filter domain.AuditFilter) ([]*domain.AuditEvent, int, error)
+	Proof(ctx context.Context, txID string) (*SettlementProof, error)
 }
 
 type service struct {
-	repo eventStore
-	// tamper chains every append onto the SHA-256 row-hash chain. nil keeps
-	// the plain append-only write (used when tamper-proofing is not wired).
-	tamper TamperProofStore
+	repo       *postgres.AuditRepo
+	proofSource settlementProofSource
 }
 
-func NewService(repo eventStore, tamper TamperProofStore) Service {
-	return &service{repo: repo, tamper: tamper}
+func NewService(repo *postgres.AuditRepo, txRepos ...*postgres.TransactionRepo) Service {
+	var source settlementProofSource
+	if len(txRepos) > 0 && txRepos[0] != nil {
+		source = txRepos[0]
+	}
+	return &service{repo: repo, proofSource: source}
 }
 
 func (s *service) Record(ctx context.Context, event *domain.AuditEvent) error {
@@ -198,22 +189,11 @@ func (s *service) Export(ctx context.Context, filter domain.AuditFilter, format 
 	return data, "application/json", nil
 }
 
-// ExportBundle serializes the whole tamper-proof audit chain as a JSON
-// bundle that external regulatory inspectors can re-verify offline with
-// VerifyChainBundle.
-func (s *service) ExportBundle(ctx context.Context) ([]byte, string, error) {
-	if s.tamper == nil {
-		return nil, "", errors.New("tamper-proof audit chain is not configured")
+func (s *service) Proof(ctx context.Context, txID string) (*SettlementProof, error) {
+	if s == nil || s.proofSource == nil {
+		return nil, ErrProofUnavailable
 	}
-	bundle, err := ExportChainBundle(ctx, s.tamper)
-	if err != nil {
-		return nil, "", err
-	}
-	data, err := json.Marshal(bundle)
-	if err != nil {
-		return nil, "", fmt.Errorf("encode audit bundle: %w", err)
-	}
-	return data, "application/json", nil
+	return GetProof(ctx, s.proofSource, txID)
 }
 
 func clientIP(r *http.Request) string {

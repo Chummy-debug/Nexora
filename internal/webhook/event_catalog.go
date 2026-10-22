@@ -20,6 +20,7 @@ var eventCatalog = []EventCatalogEntry{
 	{domain.EventTransferSettled, "A transfer has been confirmed on Stellar.", json.RawMessage(`{"id":"txn_123","status":"confirmed","amount":"25.00","asset":"USDC","stellar_tx_hash":"abc123"}`)},
 	{domain.EventTransferFailed, "A transfer failed before settlement completed.", json.RawMessage(`{"id":"txn_123","status":"failed","amount":"25.00","asset":"USDC","failure_reason":"insufficient_balance"}`)},
 	{domain.EventWalletFunded, "A wallet received funds.", json.RawMessage(`{"wallet_id":"wal_123","asset":"USDC","amount":"25.00","transaction_hash":"abc123"}`)},
+	{domain.EventWalletBalanceLow, "A wallet's balance has fallen below the configured threshold.", json.RawMessage(`{"alert_id":"alert_123","wallet_id":"wal_123","asset_code":"USDC","asset_issuer":"issuer_123","balance":"50.00","threshold":"100.00","triggered_at":"2024-01-01T00:00:00Z"}`)},
 	{"payment.completed", "A payment completed successfully.", json.RawMessage(`{"payment_id":"pay_123","status":"completed","amount":"25.00","currency":"USDC"}`)},
 	{"payment.failed", "A payment could not be completed.", json.RawMessage(`{"payment_id":"pay_123","status":"failed","failure_reason":"declined"}`)},
 	{"fx.quote.created", "A foreign-exchange quote was created.", json.RawMessage(`{"quote_id":"quo_123","base_asset":"USDC","quote_asset":"NGN","rate":"1500.00"}`)},

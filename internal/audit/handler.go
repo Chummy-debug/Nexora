@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Get("/", h.List)
 		r.Get("/export", h.Export)
-		r.Get("/bundle", h.Bundle)
+		r.Get("/proofs/{tx_id}", h.Proof)
 	}
 }
 
@@ -68,19 +69,23 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// Bundle serves the tamper-proof audit log bundle: every record plus its
-// hash-chain links, ready for external regulatory inspection.
-func (h *Handler) Bundle(w http.ResponseWriter, r *http.Request) {
-	data, contentType, err := h.svc.ExportBundle(r.Context())
-	if err != nil {
-		api.InternalError(w, err)
+func (h *Handler) Proof(w http.ResponseWriter, r *http.Request) {
+	txID := chi.URLParam(r, "tx_id")
+	if txID == "" {
+		api.BadRequest(w, "tx_id is required")
 		return
 	}
 
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", "attachment; filename=\"audit-bundle.json\"")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	proof, err := h.svc.Proof(r.Context(), txID)
+	if err != nil {
+		if errors.Is(err, ErrTransactionProofNotFound) || errors.Is(err, domain.ErrTransactionNotFound) {
+			api.NotFound(w, err.Error())
+			return
+		}
+		api.InternalError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, proof)
 }
 
 func parseFilter(r *http.Request) domain.AuditFilter {
