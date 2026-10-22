@@ -9,7 +9,7 @@ info:
     batch disbursements, fiat on/off-ramps, and a developer-friendly webhook system.
 
 
-    All endpoints under `/v1` require a Bearer API key in the `Authorization` header.
+    All endpoints under `/v1` require a Bearer API key in the `Authorization` header, except `/v1/travel-rule/confirmations`, which is authenticated by a trusted VASP signature.
 
 
     ## API key scopes
@@ -878,6 +878,63 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /v1/travel-rule/confirmations:
+    post:
+      operationId: receiveTravelRuleConfirmation
+      summary: Receive signed Travel Rule confirmation
+      description: Accepts a recipient VASP confirmation only after its configured Ed25519 signature is verified.
+      tags:
+      - Compliance
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - confirmation_id
+              - message_id
+              - transfer_id
+              - vasp_id
+              - status
+              - envelope_sha256
+              - issued_at
+              - signature
+              properties:
+                confirmation_id:
+                  type: string
+                message_id:
+                  type: string
+                  format: uuid
+                transfer_id:
+                  type: string
+                  format: uuid
+                vasp_id:
+                  type: string
+                status:
+                  type: string
+                  enum:
+                  - confirmed
+                  - rejected
+                envelope_sha256:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                issued_at:
+                  type: string
+                  format: date-time
+                signature:
+                  type: string
+                  description: Base64url Ed25519 signature over the canonical confirmation fields.
+      responses:
+        '202':
+          description: Signed confirmation accepted
+        '400':
+          description: Malformed confirmation
+        '401':
+          description: Signature, timestamp, VASP, or message binding failed verification
+        '500':
+          description: Confirmation could not be persisted or applied
   /v1/transfers:
     post:
       operationId: initiateTransfer
@@ -3671,6 +3728,20 @@ components:
           items:
             type: string
           description: Optional tags for categorization and querying
+        travel_rule:
+          type: object
+          description: Required at or above the configured USD threshold when Travel Rule is enabled.
+          required:
+          - recipient_vasp_id
+          - ivms101
+          properties:
+            recipient_vasp_id:
+              type: string
+              description: Identifier from the operator-managed trusted VASP directory.
+            ivms101:
+              type: object
+              description: IVMS 101 originator and beneficiary party data using standard camelCase field names.
+              additionalProperties: true
     TransferResponse:
       type: object
       properties:
@@ -3693,6 +3764,8 @@ components:
           - confirmed
           - failed
           - reconciliation_failed
+          - compliance_hold
+          - approval_pending
         from_wallet_id:
           type: string
         to_wallet_id:

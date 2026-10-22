@@ -57,6 +57,7 @@ type createTransferRequest struct {
 	Reference         string   `json:"reference,omitempty"`
 	ExternalReference *string  `json:"external_reference,omitempty"`
 	Tags              []string `json:"tags,omitempty"`
+	TravelRule        *domain.TravelRuleRequest `json:"travel_rule,omitempty"`
 }
 
 type transferResponse struct {
@@ -141,6 +142,7 @@ func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 		ExternalReference: req.ExternalReference,
 		Tags:              req.Tags,
 		IdempotencyKey:    idempotencyKey,
+		TravelRule:        req.TravelRule,
 	})
 	if err != nil {
 		api.HandleDomainError(w, err)

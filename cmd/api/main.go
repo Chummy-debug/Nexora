@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"os/signal"
@@ -54,6 +55,30 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
+
+type travelRuleUSDValuator struct {
+	service fx.Service
+}
+
+func (v travelRuleUSDValuator) USDValue(ctx context.Context, asset string, amount decimal.Decimal) (decimal.Decimal, error) {
+	if amount.Sign() < 0 {
+		return decimal.Zero, errors.New("transfer amount cannot be negative")
+	}
+	if strings.EqualFold(asset, "USDC") {
+		return amount, nil
+	}
+	if v.service == nil {
+		return decimal.Zero, errors.New("FX service is unavailable for USD valuation")
+	}
+	rate, err := v.service.GetRates(ctx, strings.ToUpper(asset), "USDC")
+	if err != nil {
+		return decimal.Zero, err
+	}
+	if rate == nil || rate.Rate.Sign() <= 0 || rate.Stale {
+		return decimal.Zero, errors.New("FX provider returned a non-positive USD conversion rate")
+	}
+	return amount.Mul(rate.Rate), nil
+}
 
 func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "run migrations and exit")
@@ -264,6 +289,25 @@ func main() {
 		cfg.StellarUSDCIssuer, []fx.Provider{horizonProvider, oracleProvider}, cfg.FXSpreadBps,
 	)
 	walletSvc.WithFXService(fxSvc)
+
+	var travelRuleHandler *compliance.TravelRuleHandler
+	if cfg.TravelRuleEnabled {
+		travelRuleSvc, err := compliance.NewTravelRuleService(
+			postgres.NewTravelRuleRepo(db),
+			travelRuleUSDValuator{service: fxSvc},
+			cfg.TravelRuleVASPDirectoryJSON,
+			cfg.TravelRuleOriginatingVASPID,
+			nil,
+			txRepo,
+			queueClient,
+			cfg.TravelRuleThresholdUSD,
+		)
+		if err != nil {
+			log.Fatal().Err(err).Msg("configure Travel Rule exchange")
+		}
+		transferSvc = transfer.ConfigureTravelRuleGate(transferSvc, travelRuleSvc)
+		travelRuleHandler = compliance.NewTravelRuleHandler(travelRuleSvc)
+	}
 
 	// fiat.Service drives exactly one rail. Flutterwave is the live provider;
 	// the Yellow Card provider is implemented (internal/fiat/yellowcard) but
@@ -529,6 +573,7 @@ func main() {
 		tenantDataHandler,
 		server.AuditScopeDenials(auditSvc),
 		geoOptions,
+		travelRuleHandler,
 	)
 	server.RegisterDocsRoutes(srv.Router())
 
