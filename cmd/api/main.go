@@ -337,7 +337,19 @@ func main() {
 
 	authHandler := auth.NewHandler(authSvc)
 	orgHandler := org.NewHandler(orgSvc)
-	walletHandler := wallet.NewHandler(walletSvc).WithIdempotency(idemMW)
+	simulationRedisOptions := *redisOpt
+	simulationRedisOptions.ContextTimeoutEnabled = true
+	simulationRedisOptions.MaxRetries = -1
+	simulationRedisOptions.DialTimeout = 20 * time.Millisecond
+	simulationRedisOptions.ReadTimeout = 20 * time.Millisecond
+	simulationRedisOptions.WriteTimeout = 20 * time.Millisecond
+	simulationRedis := redis.NewUniversalClient(&simulationRedisOptions)
+	defer simulationRedis.Close()
+	simulationSvc := wallet.NewSimulationService(walletRepo,
+		stellar.NewPreflightClient(cfg.StellarLiveHorizonURL, cfg.StellarHorizonTimeout),
+		stellar.NewPreflightClient(cfg.StellarTestnetHorizonURL, cfg.StellarHorizonTimeout),
+		simulationRedis, cfg.StellarLiveHorizonURL+"|"+cfg.StellarTestnetHorizonURL)
+	walletHandler := wallet.NewHandler(walletSvc).WithIdempotency(idemMW).WithSimulation(simulationSvc)
 
 	// Contract wallets are opt-in: without an installed WASM hash the API keeps
 	// serving custodial wallets only and the contract routes stay unregistered.
