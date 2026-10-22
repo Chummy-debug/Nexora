@@ -278,6 +278,14 @@ func (s *service) ExecuteTransfer(
 		return "", err
 	}
 
+	// Creating or repairing the trustline up front turns the common
+	// op_no_trust / op_not_authorized failures into a deterministic preflight.
+	if creditAsset, ok := asset.(txnbuild.CreditAsset); ok {
+		if _, err := s.EnsureTrustline(ctx, walletID, creditAsset.Code, creditAsset.Issuer, amount); err != nil {
+			return "", fmt.Errorf("ensure trustline: %w", err)
+		}
+	}
+
 	acct, err := stellar.LoadAccountWithContext(ctx, s.client(ctx), w.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("load account: %w", err)
