@@ -280,6 +280,7 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusFailed, txHash); err != nil {
 			log.Error().Err(err).Str("tx_id", txID).Msg("settlement: failed to update failed status")
 		}
+		e.rollbackVelocity(ctx, tx)
 		return fmt.Errorf("submit to stellar: %w", outcome.err)
 	}
 }
@@ -292,6 +293,7 @@ func (e *Engine) finalizeConfirmed(ctx context.Context, tx *domain.Transaction, 
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusConfirmed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", txHash).Msg("failed to update confirmed status")
 	}
+	e.finalizeVelocity(ctx, tx)
 
 	// Update cached balances for source and destination wallets for the transferred asset
 	srcBalances := e.syncWalletBalances(ctx, srcWallet)
@@ -361,7 +363,26 @@ func (e *Engine) tryResolveAmbiguous(ctx context.Context, tx *domain.Transaction
 	if err := e.txRepo.UpdateStatus(ctx, txID, domain.StatusFailed, txHash); err != nil {
 		log.Error().Err(err).Str("tx_id", txID).Msg("settlement: failed to update failed status")
 	}
+	e.rollbackVelocity(ctx, tx)
 	return true
+}
+
+func (e *Engine) finalizeVelocity(ctx context.Context, tx *domain.Transaction) {
+	if e.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := e.velocity.Finalize(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement: failed to finalize velocity reservation")
+	}
+}
+
+func (e *Engine) rollbackVelocity(ctx context.Context, tx *domain.Transaction) {
+	if e.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := e.velocity.Rollback(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement: failed to roll back velocity reservation")
+	}
 }
 
 func (e *Engine) buildAsset(code string) (txnbuild.Asset, error) {

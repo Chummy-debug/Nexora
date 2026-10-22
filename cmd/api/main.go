@@ -118,6 +118,7 @@ func main() {
 	}
 	redisClient := redis.NewUniversalClient(redisOpt)
 	defer redisClient.Close()
+	velocityLimiter := compliance.NewRedisVelocityLimiter(redisClient)
 
 	tenantRepo := postgres.NewTenantRepo(repoDB)
 	userRepo := postgres.NewUserRepo(repoDB)
@@ -194,6 +195,7 @@ func main() {
 		transfer.ConfigureStellarClient(transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo), stellarClient),
 		clientResolver,
 	)
+	transferSvc = transfer.ConfigureVelocityLimiter(transferSvc, velocityLimiter)
 	webhookSvc := webhook.NewService(webhookRepo, redisClient, queueClient, 120, cfg.WebhookAllowPrivateNetworks, cfg.MasterEncryptionKey)
 	if configSvc, ok := webhookSvc.(webhook.ConfigService); ok {
 		if err := configSvc.MigrateLegacySigningSecrets(ctx); err != nil {

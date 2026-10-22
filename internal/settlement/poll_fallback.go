@@ -125,6 +125,7 @@ type FallbackPoller struct {
 	config          FallbackPollerConfig
 	walletReleaser  WalletBalanceReleaser
 	detailsRecorder SettlementDetailsRecorder
+	velocity        transfer.VelocityLimiter
 
 	// Internal state
 	pollStatesMu sync.RWMutex
@@ -418,6 +419,7 @@ func (p *FallbackPoller) handleConfirmedTransaction(
 			return fmt.Errorf("update status confirmed: %w", err)
 		}
 	}
+	p.finalizeVelocity(ctx, tx)
 
 	// 2. Record ledger sequence and fee charged
 	record := &ConfirmedRecord{
@@ -465,6 +467,7 @@ func (p *FallbackPoller) handleDroppedTransaction(ctx context.Context, tx *domai
 			log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement poller: update failed status")
 		}
 	}
+	p.rollbackVelocity(ctx, tx)
 
 	// 2. Release reserved wallet balance
 	if p.walletReleaser != nil {
@@ -488,6 +491,29 @@ func (p *FallbackPoller) handleDroppedTransaction(ctx context.Context, tx *domai
 		Msg("settlement poller: transaction dropped/failed after max TTL, released reserved balance")
 
 	return nil
+}
+
+func (p *FallbackPoller) WithVelocityLimiter(limiter transfer.VelocityLimiter) *FallbackPoller {
+	p.velocity = limiter
+	return p
+}
+
+func (p *FallbackPoller) finalizeVelocity(ctx context.Context, tx *domain.Transaction) {
+	if p.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := p.velocity.Finalize(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement poller: failed to finalize velocity reservation")
+	}
+}
+
+func (p *FallbackPoller) rollbackVelocity(ctx context.Context, tx *domain.Transaction) {
+	if p.velocity == nil || tx == nil || tx.TenantID == nil {
+		return
+	}
+	if err := p.velocity.Rollback(ctx, *tx.TenantID, tx.Asset, tx.ID); err != nil {
+		log.Error().Err(err).Str("tx_id", tx.ID).Msg("settlement poller: failed to roll back velocity reservation")
+	}
 }
 
 func (p *FallbackPoller) syncWalletBalances(ctx context.Context, walletID string) {
