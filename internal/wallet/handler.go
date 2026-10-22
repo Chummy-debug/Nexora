@@ -20,6 +20,8 @@ type Handler struct {
 	guardianGate func(http.Handler) http.Handler
 	closer       *Closer
 	closureGate  func(http.Handler) http.Handler
+	consolidator *Consolidator
+	consolidGate func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
@@ -86,6 +88,15 @@ func (h *Handler) WithCloser(closer *Closer, gate func(http.Handler) http.Handle
 	return h
 }
 
+// WithConsolidator enables the multi-wallet consolidation endpoints behind
+// gate (e.g. an Owner/Admin role check), since they move funds between the
+// tenant's wallets and can close accounts.
+func (h *Handler) WithConsolidator(c *Consolidator, gate func(http.Handler) http.Handler) *Handler {
+	h.consolidator = c
+	h.consolidGate = gate
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
@@ -115,6 +126,16 @@ func (h *Handler) Routes() func(r chi.Router) {
 			gated.Get("/closures/{closureId}", h.getClosure)
 			gated.Get("/custody-settings", h.getCustodySettings)
 			gated.Put("/custody-settings", h.putCustodySettings)
+		}
+
+		if h.consolidator != nil {
+			gated := r.With()
+			if h.consolidGate != nil {
+				gated = r.With(h.consolidGate)
+			}
+			gated.Post("/consolidations", h.createConsolidation)
+			gated.Get("/consolidations", h.listConsolidations)
+			gated.Get("/consolidations/{consolidationId}", h.getConsolidation)
 		}
 
 		if h.contractSvc != nil {
@@ -441,6 +462,55 @@ func (h *Handler) putCustodySettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.JSON(w, http.StatusOK, settings)
+}
+
+// createConsolidation previews (dry_run) or accepts a consolidation. An
+// accepted one runs in the background and is returned as 202; a retry with the
+// same idempotency_key and body returns the original operation with 200.
+func (h *Handler) createConsolidation(w http.ResponseWriter, r *http.Request) {
+	var req ConsolidationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if req.DryRun {
+		preview, err := h.consolidator.Preview(r.Context(), req)
+		if err != nil {
+			api.HandleDomainError(w, err)
+			return
+		}
+		api.JSON(w, http.StatusOK, preview)
+		return
+	}
+	op, replayed, err := h.consolidator.Submit(r.Context(), req)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if replayed {
+		status = http.StatusOK
+	}
+	api.JSON(w, status, op)
+}
+
+func (h *Handler) listConsolidations(w http.ResponseWriter, r *http.Request) {
+	limit, offset := pageParams(r)
+	ops, err := h.consolidator.List(r.Context(), limit, offset)
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{"consolidations": ops})
+}
+
+func (h *Handler) getConsolidation(w http.ResponseWriter, r *http.Request) {
+	op, err := h.consolidator.Get(r.Context(), chi.URLParam(r, "consolidationId"))
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, op)
 }
 
 func pageParams(r *http.Request) (limit, offset int) {

@@ -99,6 +99,13 @@ var (
 	ErrClosureAlreadyExists          = errors.New("wallet already has a pending or completed closure")
 	ErrClosureMasterAddressNotFunded = errors.New("tenant master address does not exist on the ledger")
 	ErrInvalidMasterAddress          = errors.New("master address must be a valid Stellar account ID")
+
+	// Wallet consolidation (#95).
+	ErrConsolidationNotFound            = errors.New("consolidation not found")
+	ErrConsolidationInvalid             = errors.New("invalid consolidation request")
+	ErrConsolidationKeyConflict         = errors.New("idempotency key was already used for a different consolidation")
+	ErrConsolidationNothingToMove       = errors.New("no source wallet has a balance that can be consolidated")
+	ErrConsolidationDestinationUnfunded = errors.New("destination wallet does not exist on the ledger")
 )
 
 // FX quote sanity-check errors (issue #82). A quote that trips any of these is

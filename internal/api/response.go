@@ -124,7 +124,8 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		errors.Is(err, domain.ErrUserNotFound), errors.Is(err, domain.ErrOrgNotFound), errors.Is(err, domain.ErrOrgMemberNotFound),
 		errors.Is(err, domain.ErrInviteNotFound), errors.Is(err, domain.ErrClaimableBalanceNotFound),
 		errors.Is(err, domain.ErrMarginNotFound),
-		errors.Is(err, domain.ErrAccountClosureNotFound), errors.Is(err, domain.ErrCustodySettingsNotFound):
+		errors.Is(err, domain.ErrAccountClosureNotFound), errors.Is(err, domain.ErrCustodySettingsNotFound),
+		errors.Is(err, domain.ErrConsolidationNotFound):
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrBeneficiaryNotAllowed),
@@ -175,6 +176,14 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		Error(w, http.StatusConflict, "CLOSURE_UNSUPPORTED_ACCOUNT", err.Error())
 	case errors.Is(err, domain.ErrClosureAlreadyExists):
 		Error(w, http.StatusConflict, "CLOSURE_ALREADY_EXISTS", err.Error())
+	case errors.Is(err, domain.ErrConsolidationInvalid):
+		BadRequest(w, err.Error())
+	case errors.Is(err, domain.ErrConsolidationKeyConflict):
+		Error(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, domain.ErrConsolidationNothingToMove):
+		Error(w, http.StatusConflict, "CONSOLIDATION_NOTHING_TO_MOVE", err.Error())
+	case errors.Is(err, domain.ErrConsolidationDestinationUnfunded):
+		Error(w, http.StatusConflict, "CONSOLIDATION_DESTINATION_UNFUNDED", err.Error())
 	case errors.Is(err, domain.ErrLastOrgOwner):
 		Error(w, http.StatusConflict, "LAST_ORG_OWNER", err.Error())
 	case errors.Is(err, domain.ErrInvalidCredentials):

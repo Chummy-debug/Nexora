@@ -31,6 +31,8 @@ const (
 	// TypeCustodialSweep aggregates customer deposits from custodial wallets
 	// into each opted-in tenant's master address.
 	TypeCustodialSweep = "wallet:custodial_sweep"
+	// TypeConsolidateWallets executes one accepted wallet consolidation.
+	TypeConsolidateWallets = "wallet:consolidate"
 )
 
 type TraceContext struct {
@@ -59,6 +61,15 @@ type SyncLedgerPayload struct {
 	WalletID string        `json:"wallet_id"`
 	Cursor   string        `json:"cursor"`
 	Trace    *TraceContext `json:"trace,omitempty"`
+}
+
+// ConsolidateWalletsPayload identifies the consolidation to execute and the
+// tenant and mode it runs under.
+type ConsolidateWalletsPayload struct {
+	OperationID string        `json:"operation_id"`
+	TenantID    string        `json:"tenant_id"`
+	Mode        string        `json:"mode"`
+	Trace       *TraceContext `json:"trace,omitempty"`
 }
 
 type WebhookDeliverPayload struct {

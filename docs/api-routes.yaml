@@ -56,6 +56,8 @@ routes:
   - GET /v1/usage
   - GET /v1/wallets/closures
   - "GET /v1/wallets/closures/{closureId}"
+  - GET /v1/wallets/consolidations
+  - "GET /v1/wallets/consolidations/{consolidationId}"
   - GET /v1/wallets/custody-settings
   - "GET /v1/wallets/{id}"
   - "GET /v1/wallets/{id}/balances"
@@ -89,6 +91,7 @@ routes:
   - PUT /v1/approval-policies
   - POST /v1/transfers/batch
   - POST /v1/wallets
+  - POST /v1/wallets/consolidations
   - "POST /v1/wallets/{id}/close"
   - "POST /v1/wallets/{id}/deposit/fiat"
   - "POST /v1/wallets/{id}/simulate"

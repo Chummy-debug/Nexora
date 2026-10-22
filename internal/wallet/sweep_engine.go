@@ -235,6 +235,47 @@ type walletSweep struct {
 	nativeExcess decimal.Decimal
 	payments     []sweepPayment
 	feePaid      decimal.Decimal
+	// merge closes the account after its payments: every trustline is
+	// removed and the remaining XLM, reserves included, is merged into the
+	// destination. Only consolidation sets it.
+	merge      bool
+	trustlines []domain.ClosedTrustline
+}
+
+// opCount is how many operations the wallet contributes to a transaction.
+func (w *walletSweep) opCount() int {
+	if w.merge {
+		return len(w.payments) + len(w.trustlines) + 1
+	}
+	return len(w.payments)
+}
+
+// operations builds the wallet's operations, each sourced from the wallet so
+// it signs for them: payments first, then (when merging) trustline removals
+// and the AccountMerge. Stellar applies them in order, so every trustline is
+// empty before it is removed and gone before the merge.
+func (w *walletSweep) operations(destination string) []txnbuild.Operation {
+	ops := make([]txnbuild.Operation, 0, w.opCount())
+	for _, pay := range w.payments {
+		ops = append(ops, &txnbuild.Payment{
+			Destination:   destination,
+			Amount:        pay.amount.StringFixed(stellarDecimals),
+			Asset:         paymentAsset(pay),
+			SourceAccount: w.wallet.PublicKey,
+		})
+	}
+	if !w.merge {
+		return ops
+	}
+	for _, tl := range w.trustlines {
+		line, err := txnbuild.CreditAsset{Code: tl.AssetCode, Issuer: tl.Issuer}.ToChangeTrustAsset()
+		if err != nil {
+			// The asset came from Horizon, so it is always well formed.
+			continue
+		}
+		ops = append(ops, &txnbuild.ChangeTrust{Line: line, Limit: "0", SourceAccount: w.wallet.PublicKey})
+	}
+	return append(ops, &txnbuild.AccountMerge{Destination: destination, SourceAccount: w.wallet.PublicKey})
 }
 
 // trustHeadroom is how much more of an asset the master address can receive.
@@ -268,7 +309,7 @@ func (e *SweepEngine) sweepTenant(ctx context.Context, target *domain.TenantCust
 		report.WalletsScanned += len(wallets)
 
 		plans := e.planPage(ctx, client, target, wallets, headroom, report)
-		for _, batch := range batchSweeps(plans) {
+		for _, batch := range batchWallets(plans, maxSweepSignatures) {
 			e.submitBatch(ctx, client, target, batch, report)
 		}
 		if len(wallets) < e.cfg.PageSize {
@@ -431,19 +472,23 @@ func masterHeadroom(master horizon.Account) trustHeadroom {
 	return out
 }
 
-// batchSweeps packs wallet plans greedily into transactions that respect the
-// signature and operation limits.
-func batchSweeps(plans []*walletSweep) [][]*walletSweep {
+// batchWallets packs wallet plans greedily, in order, into transactions of at
+// most maxWallets wallets (one signature each) and maxSweepOperations
+// operations.
+func batchWallets(plans []*walletSweep, maxWallets int) [][]*walletSweep {
+	if maxWallets <= 0 || maxWallets > maxSweepSignatures {
+		maxWallets = maxSweepSignatures
+	}
 	var batches [][]*walletSweep
 	var current []*walletSweep
 	ops := 0
 	for _, p := range plans {
-		if len(current) > 0 && (len(current) == maxSweepSignatures || ops+len(p.payments) > maxSweepOperations) {
+		if len(current) > 0 && (len(current) == maxWallets || ops+p.opCount() > maxSweepOperations) {
 			batches = append(batches, current)
 			current, ops = nil, 0
 		}
 		current = append(current, p)
-		ops += len(p.payments)
+		ops += p.opCount()
 	}
 	if len(current) > 0 {
 		batches = append(batches, current)
@@ -464,7 +509,7 @@ func assignFee(batch []*walletSweep, baseFee int64) (*walletSweep, int64) {
 	}
 	ops := 0
 	for _, p := range batch {
-		ops += len(p.payments)
+		ops += p.opCount()
 	}
 	fee := baseFee * int64(ops)
 	if payer == nil || payer.nativeExcess.LessThan(stroopsToXLM(fee)) {
@@ -498,14 +543,7 @@ func (e *SweepEngine) submitBatch(ctx context.Context, client stellar.Client, ta
 
 	var ops []txnbuild.Operation
 	for _, p := range batch {
-		for _, pay := range p.payments {
-			ops = append(ops, &txnbuild.Payment{
-				Destination:   target.MasterAddress,
-				Amount:        pay.amount.StringFixed(stellarDecimals),
-				Asset:         paymentAsset(pay),
-				SourceAccount: p.wallet.PublicKey,
-			})
-		}
+		ops = append(ops, p.operations(target.MasterAddress)...)
 	}
 	sweep := &domain.CustodialSweep{
 		ID:                 uuid.New().String(),

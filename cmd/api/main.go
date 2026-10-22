@@ -400,6 +400,12 @@ func main() {
 		WithClientResolver(clientResolver).
 		WithSignerResolver(signerResolver)
 	walletHandler = walletHandler.WithCloser(accountCloser, server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
+	// Multi-wallet consolidation (#95): priced here, executed by the worker.
+	consolidator := wallet.NewConsolidator(walletRepo, wallet.NewConsolidationRepository(repoDB), wallet.NewClosureRepository(repoDB),
+		stellarClient, signer, auditSvc, queueClient).
+		WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver)
+	walletHandler = walletHandler.WithConsolidator(consolidator, server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	reconcileHandler = reconcileHandler.WithAuditLogger(auditSvc)
 	auditHandler := audit.NewHandler(auditSvc)
 	usageHandler := server.NewUsageHandler(repoDB)

@@ -444,7 +444,7 @@ func TestBatchSweeps_RespectsOperationLimit(t *testing.T) {
 	for i := range plans {
 		plans[i] = &walletSweep{payments: make([]sweepPayment, 6)}
 	}
-	batches := batchSweeps(plans)
+	batches := batchWallets(plans, maxSweepSignatures)
 	if len(batches) != 2 || len(batches[0]) != 16 || len(batches[1]) != 1 {
 		t.Fatalf("want 16 wallets (96 ops) then 1, got %d batches", len(batches))
 	}

@@ -281,6 +281,11 @@ func main() {
 		treasury.OptionsFromConfig(cfg.TreasuryBaseReserve, cfg.TreasuryReserveCacheTTLSec, cfg.TreasuryReserveConcurrency)...,
 	)
 	treasuryWorker := treasury.NewWorker(treasurySvc)
+	// Executes consolidations accepted by the API (#95).
+	consolidator := wallet.NewConsolidator(walletRepo, wallet.NewConsolidationRepository(repoDB), wallet.NewClosureRepository(repoDB),
+		stellarClient, signer, audit.NewService(postgres.NewAuditRepo(repoDB)), nil).
+		WithClientResolver(clientResolver).
+		WithSignerResolver(signerResolver)
 	// Custodial deposit sweep (#94): only built when thresholds are set, and
 	// even then it touches only tenants that opted in via custody settings.
 	var custodialSweepEnabled bool
@@ -427,6 +432,7 @@ func main() {
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
 	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
 	mux.HandleFunc(queue.TypeCustodialSweep, treasuryWorker.HandleCustodialSweep)
+	mux.HandleFunc(queue.TypeConsolidateWallets, consolidator.HandleConsolidate)
 	mux.HandleFunc(queue.TypeExpireClaimableBalances, claimableWorker.HandleExpiry)
 	mux.HandleFunc(queue.TypeExpireRateLocks, rateLockExpirationWorker.HandleExpireLocks)
 	if complianceWorker != nil {
