@@ -153,7 +153,9 @@ func (s *service) CreateWallet(ctx context.Context, ownerPublicKey ...string) (*
 
 	}
 
-	encryptedBytes, err := crypto.Encrypt([]byte(secretKey), s.masterKey)
+	// With a KMS configured the seed is sealed under a fresh, KMS-wrapped
+	// data key (v2 envelope); otherwise under the master key (v1).
+	encryptedBytes, err := crypto.SealSecret(ctx, []byte(secretKey), s.masterKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt secret: %w", err)
 	}

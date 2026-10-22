@@ -16,6 +16,7 @@ import (
 	"github.com/Lumen-Nexora/Nexora/internal/claimable"
 	"github.com/Lumen-Nexora/Nexora/internal/compliance"
 	"github.com/Lumen-Nexora/Nexora/internal/config"
+	"github.com/Lumen-Nexora/Nexora/internal/crypto"
 	"github.com/Lumen-Nexora/Nexora/internal/fees"
 	"github.com/Lumen-Nexora/Nexora/internal/fx"
 	"github.com/Lumen-Nexora/Nexora/internal/indexer"
@@ -111,6 +112,14 @@ func main() {
 	stellarClient := stellar.NewClient(cfg.StellarLiveHorizonURL, cfg.StellarLiveNetwork, cfg.StellarHorizonTimeout)
 	testStellarClient := stellar.NewClient(cfg.StellarTestnetHorizonURL, cfg.StellarTestnetNetwork, cfg.StellarHorizonTimeout)
 	clientResolver := stellar.NewModeAwareClients(stellarClient, testStellarClient)
+	// Custodial seeds are sealed under KMS-wrapped data keys when a KMS is
+	// configured (#97). Signers open them only for the moment of signing, and
+	// seeds sealed before the KMS was enabled keep working via the master key.
+	if kms, err := crypto.ConfigureKMS(context.Background(), cfg.KMS()); err != nil {
+		log.Fatal().Err(err).Msg("configure KMS")
+	} else if kms != nil {
+		log.Info().Str("provider", kms.Name()).Dur("rotation_period", cfg.KMSRotationPeriod).Msg("custodial seed envelope encryption enabled")
+	}
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarLiveNetwork)
 	testSigner := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarTestnetNetwork)
 	signerResolver := stellar.NewModeAwareSigners(signer, testSigner)

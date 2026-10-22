@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Lumen-Nexora/Nexora/internal/crypto"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/stellar/go/keypair"
@@ -53,6 +54,21 @@ type Config struct {
 	CustodialSweepThresholds        string
 	CustodialSweepInterval          string
 	CustodialSweepConcurrency       int
+	KMSProvider                     string // KMS envelope encryption of custodial seeds (#97)
+	KMSRotationPeriod               time.Duration
+	AWSRegion                       string
+	AWSKMSKeyID                     string
+	AWSAccessKeyID                  string
+	AWSSecretAccessKey              string
+	AWSSessionToken                 string
+	AWSKMSEndpoint                  string
+	GCPKMSKeyName                   string
+	GCPAccessToken                  string
+	VaultAddr                       string
+	VaultToken                      string
+	VaultNamespace                  string
+	VaultTransitMount               string
+	VaultTransitKey                 string
 	FlutterwaveSecretKey            string
 	FlutterwaveWebhookHash          string
 	BalanceDiscrepancyThreshold     string
@@ -198,6 +214,23 @@ func validateStellarAddress(name, value string, required bool) error {
 // Validate checks the load-bearing configuration values. It is called by Load
 // so a misconfigured process fails fast at boot instead of silently changing
 // money-movement or compliance behaviour at runtime.
+// KMS returns the key manager settings for crypto.ConfigureKMS.
+func (c *Config) KMS() crypto.KMSConfig {
+	return crypto.KMSConfig{
+		Provider:       c.KMSProvider,
+		RotationPeriod: c.KMSRotationPeriod,
+		AWS: crypto.AWSKMSConfig{
+			Region: c.AWSRegion, KeyID: c.AWSKMSKeyID, AccessKeyID: c.AWSAccessKeyID,
+			SecretAccessKey: c.AWSSecretAccessKey, SessionToken: c.AWSSessionToken, Endpoint: c.AWSKMSEndpoint,
+		},
+		GCP: crypto.GCPKMSConfig{KeyName: c.GCPKMSKeyName, AccessToken: c.GCPAccessToken},
+		Vault: crypto.VaultConfig{
+			Address: c.VaultAddr, Token: c.VaultToken, Namespace: c.VaultNamespace,
+			Mount: c.VaultTransitMount, Key: c.VaultTransitKey,
+		},
+	}
+}
+
 func (c *Config) Validate() error {
 	// The compliance screener exempts platform-wallet traffic from the
 	// behavioural velocity and structuring rules. Without the platform wallet
@@ -239,6 +272,12 @@ func (c *Config) Validate() error {
 		if _, bad := wellKnownTestnetAddresses[kp.Address()]; bad {
 			return fmt.Errorf("TREASURY_SECRET_KEY belongs to a well-known publicly funded testnet account (%s); use a dedicated key", kp.Address())
 		}
+	}
+
+	// Build the key manager once to fail fast on missing or malformed KMS
+	// settings; no network call is made here.
+	if _, err := crypto.NewKMS(c.KMS()); err != nil {
+		return fmt.Errorf("KMS_PROVIDER=%s: %w", c.KMSProvider, err)
 	}
 
 	if !c.CORSAllowedOriginsConfiguredExplicitly && c.Env != "development" && containsLocalhostWildcard(c.CORSAllowedOrigins) {
@@ -326,6 +365,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("TREASURY_RESERVE_CONCURRENCY", "16")
 	viper.SetDefault("CUSTODIAL_SWEEP_INTERVAL", "@every 15m")
 	viper.SetDefault("CUSTODIAL_SWEEP_CONCURRENCY", "8")
+	viper.SetDefault("KMS_PROVIDER", "none")
+	viper.SetDefault("VAULT_TRANSIT_MOUNT", "transit")
 	viper.SetDefault("WEBHOOK_ALLOW_PRIVATE_NETWORKS", "false")
 	viper.SetDefault("IDEMPOTENCY_TTL_HOURS", "24")
 	viper.SetDefault("INDEXER_PAYMENTS_PAGE_LIMIT", "50")
@@ -443,6 +484,21 @@ func Load() (*Config, error) {
 		CustodialSweepThresholds:        viper.GetString("CUSTODIAL_SWEEP_THRESHOLDS"),
 		CustodialSweepInterval:          viper.GetString("CUSTODIAL_SWEEP_INTERVAL"),
 		CustodialSweepConcurrency:       viper.GetInt("CUSTODIAL_SWEEP_CONCURRENCY"),
+		KMSProvider:                     strings.ToLower(strings.TrimSpace(viper.GetString("KMS_PROVIDER"))),
+		KMSRotationPeriod:               viper.GetDuration("KMS_ROTATION_PERIOD"),
+		AWSRegion:                       viper.GetString("AWS_REGION"),
+		AWSKMSKeyID:                     viper.GetString("AWS_KMS_KEY_ID"),
+		AWSAccessKeyID:                  viper.GetString("AWS_ACCESS_KEY_ID"),
+		AWSSecretAccessKey:              viper.GetString("AWS_SECRET_ACCESS_KEY"),
+		AWSSessionToken:                 viper.GetString("AWS_SESSION_TOKEN"),
+		AWSKMSEndpoint:                  viper.GetString("AWS_KMS_ENDPOINT"),
+		GCPKMSKeyName:                   viper.GetString("GCP_KMS_KEY_NAME"),
+		GCPAccessToken:                  viper.GetString("GCP_ACCESS_TOKEN"),
+		VaultAddr:                       viper.GetString("VAULT_ADDR"),
+		VaultToken:                      viper.GetString("VAULT_TOKEN"),
+		VaultNamespace:                  viper.GetString("VAULT_NAMESPACE"),
+		VaultTransitMount:               viper.GetString("VAULT_TRANSIT_MOUNT"),
+		VaultTransitKey:                 viper.GetString("VAULT_TRANSIT_KEY"),
 		FlutterwaveSecretKey:            viper.GetString("FLUTTERWAVE_SECRET_KEY"),
 		FlutterwaveWebhookHash:          viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
 		BalanceDiscrepancyThreshold:     viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),
