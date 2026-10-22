@@ -1238,7 +1238,7 @@ paths:
     post:
       operationId: executeConversion
       summary: Execute a conversion
-      description: Executes a previously quoted FX conversion. The quote must not be expired or already used.
+      description: Executes a previously quoted FX conversion. The quote must not be expired or already used. Current executable orderbook depth is checked before consuming the quote or rate lock. Excess impact returns SLIPPAGE_EXCEEDED with the calculation in error.details; insufficient liquidity returns INSUFFICIENT_LIQUIDITY.
       tags:
       - FX
       requestBody:
@@ -1274,7 +1274,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '422':
-          description: Quote expired or already used
+          description: Quote expired, already used, or insufficient executable liquidity
           content:
             application/json:
               schema:
@@ -1285,6 +1285,12 @@ paths:
                   message: quote expired
                   status: 422
                   request_id: req-example
+        '503':
+          description: Current orderbook depth unavailable; conversion was not executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /v1/fx/rates:
@@ -3214,6 +3220,9 @@ components:
               - INSUFFICIENT_SWEEPABLE_BALANCE
               - QUOTE_EXPIRED
               - QUOTE_ALREADY_USED
+              - SLIPPAGE_EXCEEDED
+              - INSUFFICIENT_LIQUIDITY
+              - DEPTH_UNAVAILABLE
               - REVIEW_ALREADY_DECIDED
               - CLAIMABLE_BALANCE_NOT_PENDING
               - REQUEST_IN_PROGRESS
@@ -3229,6 +3238,10 @@ components:
             request_id:
               type: string
               description: Effective X-Request-ID response header value
+            details:
+              type: object
+              additionalProperties: true
+              description: For SLIPPAGE_EXCEEDED, contains trade_size, top_price, effective_price, price_impact_pct, price_impact_bps, tolerance_pct, tolerance_bps, tier, and allowed. Decimal values are strings.
     HealthResponse:
       type: object
       properties:
@@ -3914,7 +3927,9 @@ components:
           description: Optional minimum acceptable output amount
         max_slippage_bps:
           type: integer
-          description: Optional maximum acceptable slippage in basis points
+          minimum: 5
+          maximum: 500
+          description: Maximum acceptable price impact in basis points (5 = 0.05%, 500 = 5%). Defaults to 50 for trades up to 10,000 source units, 100 up to 100,000, and 200 above that.
     ConversionResponse:
       type: object
       properties:
