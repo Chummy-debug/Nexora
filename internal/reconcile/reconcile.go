@@ -143,6 +143,7 @@ type Service struct {
 	driftMu           sync.RWMutex
 	currentDrift      map[string]DriftSnapshot
 	fraudDetector     *FraudDetector
+	autoRemediator    *AutoRemediator
 }
 
 func NewService(
@@ -563,40 +564,66 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 	horizonTx, err := stellar.TransactionDetailWithContext(ctx, s.stellar, hash)
 	if err != nil {
 		if stellar.IsNotFound(err) {
-			log.Error().Str("tx_id", tx.ID).Str("tx_hash", hash).Msg("reconcile: confirmed tx not found on horizon")
-			if repoErr := s.repo.UpdateReconciliationStatus(ctx, tx.ID, domain.StatusReconciliationFailed); repoErr != nil {
-				return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
+			// A confirmed transaction Horizon has not ingested yet may just be
+			// Horizon lagging the database by a ledger or two. Let the
+			// auto-remediator watch it for a few ledger closes before paging
+			// anyone; it escalates through flagMissingOnChain if it persists.
+			if s.deferTransientMissing(ctx, tx) {
+				return nil
 			}
-
-			s.writeAudit(ctx, tx, "HTTP 404", false, false, false, domain.AuditNotFound, "transaction not found on Horizon")
-			s.alerting.Critical(ctx, "Reconciliation Failed: Missing Transaction",
-				fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but returned 404 on Horizon. Possible ledger loss or fork.", tx.ID, hash))
-			return nil
+			return s.flagMissingOnChain(ctx, tx)
 		}
 		return fmt.Errorf("fetch transaction detail: %w", err)
 	}
 
+	_, err = s.verifyHorizonTransaction(ctx, tx, horizonTx)
+	return err
+}
+
+// flagMissingOnChain marks a confirmed transaction Horizon does not know about
+// as reconciliation_failed, writes the not_found audit entry, and pages an
+// operator.
+func (s *Service) flagMissingOnChain(ctx context.Context, tx *domain.Transaction) error {
+	hash := tx.TxHash
+	log.Error().Str("tx_id", tx.ID).Str("tx_hash", hash).Msg("reconcile: confirmed tx not found on horizon")
+	if repoErr := s.repo.UpdateReconciliationStatus(ctx, tx.ID, domain.StatusReconciliationFailed); repoErr != nil {
+		return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
+	}
+
+	s.writeAudit(ctx, tx, "HTTP 404", false, false, false, domain.AuditNotFound, "transaction not found on Horizon")
+	s.alerting.Critical(ctx, "Reconciliation Failed: Missing Transaction",
+		fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but returned 404 on Horizon. Possible ledger loss or fork.", tx.ID, hash))
+	return nil
+}
+
+// verifyHorizonTransaction checks a confirmed transaction against the Horizon
+// record for its hash. It reports verified=true only when every check passed
+// and the transaction was marked reconciled; any failure is flagged as
+// reconciliation_failed, audited, and alerted before returning false.
+func (s *Service) verifyHorizonTransaction(ctx context.Context, tx *domain.Transaction, horizonTx horizon.Transaction) (bool, error) {
+	hash := tx.TxHash
+
 	if !horizonTx.Successful {
 		log.Error().Str("tx_id", tx.ID).Str("tx_hash", hash).Msg("reconcile: confirmed tx marked as failed on horizon")
 		if repoErr := s.repo.UpdateReconciliationStatus(ctx, tx.ID, domain.StatusReconciliationFailed); repoErr != nil {
-			return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
+			return false, fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
 		}
 
 		s.writeAudit(ctx, tx, "unsuccessful", false, false, false, domain.AuditNotFound,
 			fmt.Sprintf("transaction successful=false on Horizon (result: %s)", horizonTx.ResultXdr))
 		s.alerting.Critical(ctx, "Reconciliation Failed: Unsuccessful Transaction",
 			fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but Horizon reports it as unsuccessful.", tx.ID, hash))
-		return nil
+		return false, nil
 	}
 
 	ops, err := stellar.OperationsForTransactionWithContext(ctx, s.stellar, hash)
 	if err != nil {
-		return fmt.Errorf("fetch operations for transaction: %w", err)
+		return false, fmt.Errorf("fetch operations for transaction: %w", err)
 	}
 
 	expected, err := s.buildExpectedPayment(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("resolve expected payment for tx %s: %w", tx.ID, err)
+		return false, fmt.Errorf("resolve expected payment for tx %s: %w", tx.ID, err)
 	}
 
 	amountVerified, assetVerified, feeVerified, details := verifyOps(ops, expected)
@@ -607,13 +634,13 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 			Bool("fee_verified", feeVerified).
 			Msg("reconcile: payment mismatch")
 		if repoErr := s.repo.UpdateReconciliationStatus(ctx, tx.ID, domain.StatusReconciliationFailed); repoErr != nil {
-			return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
+			return false, fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
 		}
 
 		s.writeAudit(ctx, tx, horizonStatus(&horizonTx), amountVerified, assetVerified, feeVerified, domain.AuditMismatch, details)
 		s.alerting.Critical(ctx, "Reconciliation Failed: Payment Mismatch",
 			fmt.Sprintf("Transaction %s (hash: %s): %s", tx.ID, hash, details))
-		return nil
+		return false, nil
 	}
 
 	s.writeAudit(ctx, tx, horizonStatus(&horizonTx), true, true, true, domain.AuditOK, "all checks passed")
@@ -622,7 +649,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 	}
 
 	log.Debug().Str("tx_id", tx.ID).Str("tx_hash", hash).Msg("reconcile: verified ok")
-	return nil
+	return true, nil
 }
 
 // expectedPayment describes exactly what the platform expects a reconciled

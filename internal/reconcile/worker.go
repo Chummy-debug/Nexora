@@ -58,6 +58,12 @@ func (w *Worker) HandleReconcile(ctx context.Context, _ *asynq.Task) error {
 		log.Error().Err(err).Msg("reconcile: scheduled run failed")
 		return err
 	}
+	// Re-evaluate transient discrepancies deferred by this or earlier passes.
+	// A failure here never fails the scheduled run: unresolved observations
+	// stay put and are retried next cycle, bounded by the remediator's max age.
+	if _, err := w.service.RunAutoRemediation(ctx); err != nil {
+		log.Error().Err(err).Msg("reconcile: auto-remediation pass failed")
+	}
 	log.Info().Msg("reconcile: scheduled run complete")
 	return nil
 }
