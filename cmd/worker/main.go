@@ -419,6 +419,19 @@ func main() {
 			reconcile.NewFraudDetector(reconcile.FraudConfig{}, nil, pagerDuty),
 		)
 	}
+	if cfg.ReconciliationAutoRemediationEnabled {
+		// Transient Horizon-lag discrepancies are re-checked on each ledger
+		// close and escalated if they persist (#120).
+		reconcileSvc = reconcileSvc.WithAutoRemediator(
+			reconcile.NewAutoRemediator(reconcile.AutoRemediationConfig{
+				TransientWindow: cfg.ReconciliationAutoRemediationWindow,
+				MaxCycles:       cfg.ReconciliationAutoRemediationMaxCycles,
+				MaxAge:          cfg.ReconciliationAutoRemediationMaxAge,
+			}, postgres.NewAutoRemediationRepo(db), txRepo).
+				WithLedgerSource(reconcile.NewHorizonLedgerSource(cfg.StellarLiveHorizonURL, cfg.StellarHorizonTimeout)).
+				WithAuditTrail(audit.NewService(postgres.NewAuditRepo(repoDB))),
+		)
+	}
 	reconcileWorker := reconcile.NewWorker(reconcileSvc).
 		WithInvariantChecker(reconcile.NewInvariantChecker(invariantRepo, invariantRepo, alertClient))
 
