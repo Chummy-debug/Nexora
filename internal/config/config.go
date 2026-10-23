@@ -152,6 +152,12 @@ type Config struct {
 	AuthRateLimitIPBurst      int
 	AuthRateLimitAccountRPS   float64
 	AuthRateLimitAccountBurst int
+
+	// Auto-remediation of transient reconciliation discrepancies (#120).
+	ReconciliationAutoRemediationEnabled   bool
+	ReconciliationAutoRemediationWindow    time.Duration
+	ReconciliationAutoRemediationMaxCycles int
+	ReconciliationAutoRemediationMaxAge    time.Duration
 }
 
 // defaultCORSOrigins is the development-friendly default. Serving it outside
@@ -346,6 +352,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("FRIENDBOT_URL", "https://friendbot.stellar.org")
 	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
 	viper.SetDefault("RECONCILIATION_DRIFT_THRESHOLD_USD", "1.00")
+	viper.SetDefault("RECONCILIATION_AUTO_REMEDIATION_ENABLED", true)
+	viper.SetDefault("RECONCILIATION_AUTO_REMEDIATION_WINDOW", "10m")
+	viper.SetDefault("RECONCILIATION_AUTO_REMEDIATION_MAX_CYCLES", 3)
+	viper.SetDefault("RECONCILIATION_AUTO_REMEDIATION_MAX_AGE", "15m")
 	viper.SetDefault("OTEL_ENABLED", false)
 	viper.SetDefault("OTEL_EXPORTER_ENDPOINT", "http://localhost:4318")
 	viper.SetDefault("OTEL_SERVICE_NAME", "nexora")
@@ -590,6 +600,11 @@ func Load() (*Config, error) {
 		AuthRateLimitIPBurst:      authRateLimitIPBurst,
 		AuthRateLimitAccountRPS:   authRateLimitAccountRPS,
 		AuthRateLimitAccountBurst: authRateLimitAccountBurst,
+
+		ReconciliationAutoRemediationEnabled:   viper.GetBool("RECONCILIATION_AUTO_REMEDIATION_ENABLED"),
+		ReconciliationAutoRemediationWindow:    viper.GetDuration("RECONCILIATION_AUTO_REMEDIATION_WINDOW"),
+		ReconciliationAutoRemediationMaxCycles: viper.GetInt("RECONCILIATION_AUTO_REMEDIATION_MAX_CYCLES"),
+		ReconciliationAutoRemediationMaxAge:    viper.GetDuration("RECONCILIATION_AUTO_REMEDIATION_MAX_AGE"),
 	}
 
 	if err := cfg.Validate(); err != nil {
